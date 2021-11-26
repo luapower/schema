@@ -1,19 +1,30 @@
 
 ## `local schema = require'schema'`
 
-This module implements a Lua-based definition language for RDBMS schemas.
-Lua-based means that instead of parsing SQL to an AST, we make a small DSL
-based on Lua's syntax and generate an AST with setfenv and metamethod magic
-with no parsing. Lua may not be a homoiconic language to let us write ASTs
-directly in it, but it gets pretty close.
+So how do you keep your database schema definition that you need to apply
+to the database server on a fresh install of your application? In SQL files
+containing CREATE TABLE statements? I have a better idea.
 
-So why would you want to declare SQL schemas in Lua anyway?
+This module implements a Lua-based Data Definition Language (DDL) for RDBMS
+schemas. Lua-based means that instead of a textual format like SQL DDL,
+we use Lua syntax to write table definitions in, and generate an Abstract
+Syntax Three (AST) from that. Using setfenv and metamethod magic we create
+a language that is very readable and at the same time more expressive than
+any textual format could be, giving us full programming power in an otherwise
+declarative language. Basically a metaprogrammed DDL.
+
+So why would you want to keep your database schema in the application anyway?
 Here's some reasons:
 
-* you want to generate SQL CREATE TABLE scripts for different SQL dialects
+* you want to generate SQL DDL scripts for different SQL dialects
 from a common structured format.
-* you want to load RDBMS metadata into a common structured format
-and report differences from a master schema and generate schema migrations.
+* you want to diff between between a live database and a master schema
+to find out if the database is migrated properly.
+* you want to generate schema migrations (semi-)automatically.
 * you want to annotate table fields with extra information for use in
-data-bound widget toolkits like [x-widgets].
+data-bound widget toolkits like [x-widgets], and you don't want to do that
+off-band in a separate file.
+* you want a "shell" API for bulk DML ops like copying tables between 
+different databases with different engines.
+* use it as a base for a scriptable ETL tool.
 
