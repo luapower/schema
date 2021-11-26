@@ -5,6 +5,8 @@
 local glue = require'glue'
 require'$'
 
+--definition parsing ---------------------------------------------------------
+
 local schema = {isschema = true}
 
 local function set_flag(flags, name, attrs)
@@ -23,6 +25,11 @@ local function set_type(types, name, t)
 	local flags = extend({}, super and super.flags)
 	append(flags, unpack(t, 2))
 	local typ = merge({istype = true, ['is'..name] = true, flags = flags}, super)
+	for k,v in pairs(t) do
+		if not (isnum(k) and k >= 1) then
+			typ[k] = v
+		end
+	end
 	types._[name] = typ
 	return typ
 end
@@ -118,15 +125,16 @@ end
 
 function schema.env.enum(s, ...)
 	local t = isstr(s) and names(s) or {s, ...}
-	return {istype = true, enum_values = t}
+	return {istype = true, isenum = true, enum_values = t}
 end
 
-function schema.env.fk(ref_tbl, on_delete)
+function schema.env.fk(ref_tbl, ondelete, onupdate)
 	return function(sch, tbl, fld)
 		local fks = attr(tbl, 'fks')
 		local name = _('fk_%s_%s', tbl.name, fld.name)
 		assertf(not fks[name], 'duplicate foreign key `%s`', name)
-		fks[name] = {isfk = true, fields = {fld.name}, ref_table = ref_tbl, on_delete = on_delete}
+		add(fks, {name = name, isfk = true, fields = {fld.name},
+			ref_table = ref_tbl, ondelete = ondelete, onupdate = onupdate})
 		return empty
 	end
 end
@@ -134,13 +142,67 @@ end
 schema.flags = {}
 
 function schema.flags.pk(sch, tbl, fld)
+	assertf(not tbl.pk, 'pk already applied for table `%s`', tbl.name)
 	tbl.pk = imap(tbl.fields, 'name')
 	return empty
 end
 
+--SQL formatting -------------------------------------------------------------
+
+schema.dialects = {mysql = {}, tarantool = {}}
+
+function schema.dialects.mysql:sqlname(s)
+	return s
+end
+
+function schema.dialects.mysql:sqltype(fld)
+	local s = subst(fld.mysql, fld)
+	return _('%s%s', s, fld.unsigned and ' unsigned' or '')
+end
+
+function schema:sql(o, dialect_name)
+	dialect_name = dialect_name or self.dialect
+	local dialect = assert(self.dialects[dialect_name])
+	local function sqlname(s) return dialect:sqlname(s) end
+	local function cols(t) return concat(imap(t, sqlname), ', ') end
+	if o.istable then
+
+		local t = {}
+		for i,fld in ipairs(o.fields) do
+			local s = self:sql(fld, nil, dialect_name)
+			add(t, s)
+		end
+		local fields = concat(t, ',\n\t')
+
+		local pk = o.pk and #o.pk > 1 and _(',\n\tprimary key (%s)', cols(o.pk))
+
+		local fks
+		if o.fks then
+			fks = {}
+			for i,fk in ipairs(o.fks) do
+				local ondelete = fk.ondelete or 'restrict'
+				local onupdate = fk.onupdate or 'cascade'
+				local a1 = ondelete ~= 'restrict' and ' on delete '..ondelete or ''
+				local a2 = onupdate ~= 'restrict' and ' on update '..onupdate or ''
+				local ref_cols = cols(self.tables[fk.ref_table].pk)
+				local s = fmt(',\n\tconstraint %s foreign key (%s) references %s (%s)%s%s',
+					fk.name, cols(fk.fields), sqlname(fk.ref_table), ref_cols, a1, a2)
+				add(fks, s)
+			end
+		end
+		fks = fks and concat(fks, ',\n\t') or ''
+
+		return _('%s (\n\t%s%s%s\n)', o.name, fields, pk, fks)
+	elseif o.isfield then
+		return _('%-16s %s', dialect:sqlname(o.name), dialect:sqltype(o))
+	else
+		error'NYI'
+	end
+end
+
 if not ... then --------------------------------------------------------------
 
-local sc = schema.new()
+local sc = schema.new{dialect = 'mysql'}
 
 sc:def(function()
 
@@ -150,14 +212,14 @@ sc:def(function()
 	flags.ascii    = {charset = ascii}
 	flags.bin      = {collate = bin}
 
-	types.int      = {mysql_type = 'int'}
-	types.booln    = {mysql_type = 'tinyint(1)'}
-	types.int64    = {mysql_type = 'bigint'}
-	types.str      = {mysql_type = 'varchar({maxlen})'}
-	types.text     = {mysql_type = 'text'}
-	types.time     = {mysql_type = 'timestamp'}
-	types.date     = {mysql_type = 'date'}
-	types.dec      = {mysql_type = 'decimal({digits},{precision})'}
+	types.int      = {mysql = 'int'}
+	types.booln    = {mysql = 'tinyint(1)'}
+	types.int64    = {mysql = 'bigint'}
+	types.str      = {mysql = 'varchar({maxlen})'}
+	types.text     = {mysql = 'text'}
+	types.time     = {mysql = 'timestamp'}
+	types.date     = {mysql = 'date'}
+	types.dec      = {mysql = 'decimal({digits},{precision})'}
 
 	types.id       = {int  , unsigned}
 	types.pk       = {id   , pk, autoinc}
@@ -174,7 +236,7 @@ sc:def(function()
 	types.bool1    = {booln, not_null, default = true}
 	types.atime    = {time , not_null, default = now}
 	types.ctime    = {time , not_null, default = now}
-	types.mtime    = {time , not_null, default = now, on_update = now}
+	types.mtime    = {time , not_null, default = now, onupdate = now}
 	types.money    = {dec  , digits = 15, precision = 3} -- 999 999 999 999 . 999      (fits in a double)
 	types.qty      = {dec  , digits = 15, precision = 6} --     999 999 999 . 999 999  (fits in a double)
 	types.percent  = {dec  , digits =  8, precision = 2} --         999 999 . 99
@@ -188,7 +250,6 @@ end)
 
 sc:def(function()
 
---[[
 	tables.usr = {
 		usr         , pk      ,
 		anonymous   , bool1   ,
@@ -215,14 +276,12 @@ sc:def(function()
 	}
 
 	tables.session = {
-		token       , hash   , not_null, pk,
+		token       , hash   , not_null,
 		usr         , id     , not_null, fk(usr, cascade),
-		expires     , time   , not_null,
+		expires     , time   , not_null,pk,
 		clientip    , name   , --when it was created
 		ctime       , ctime  ,
 	}
-
-	]]
 
 	tables.usrtoken = {
 		token       , hash   , not_null, pk,
@@ -234,7 +293,7 @@ sc:def(function()
 
 end)
 
-pp(sc.tables.usrtoken)
+print(sc:sql(sc.tables.session))
 
 end
 
