@@ -28,3 +28,10 @@ off-band in a separate file.
 different databases with different engines.
 * use it as a base for a scriptable ETL tool.
 
+## API
+
+<warn>WIP</warn>
+
+--------------------------------- -------------------------------------------
+`schema.new(opt) -> sc`           create a new schema object
+--------------------------------- -------------------------------------------
