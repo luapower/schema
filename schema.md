@@ -18,8 +18,8 @@ Here's some reasons:
 
 * you want to generate SQL DDL scripts for different SQL dialects
 from a common structured format.
-* you want to diff between between a live database and a master schema
-to find out if the database is migrated properly.
+* you want to diff between a live database and a master schema to find out 
+if the database is migrated properly.
 * you want to generate schema migrations (semi-)automatically.
 * you want to annotate table fields with extra information for use in
 data-bound widget toolkits like [x-widgets], and you don't want to do that
