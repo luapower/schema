@@ -1,5 +1,5 @@
 
---Relational schema definition language & operations
+--RDBMS schema definition language & operations
 --Written by Cosmin Apreutesei. Public Domain.
 
 local glue = require'glue'
@@ -144,6 +144,9 @@ schema.flags = {}
 function schema.flags.pk(sch, tbl, fld)
 	assertf(not tbl.pk, 'pk already applied for table `%s`', tbl.name)
 	tbl.pk = imap(tbl.fields, 'name')
+	if #tbl.fields == 1 then
+		tbl.fields[1].pk = true
+	end
 	return empty
 end
 
@@ -157,7 +160,9 @@ end
 
 function schema.dialects.mysql:sqltype(fld)
 	local s = subst(fld.mysql, fld)
-	return _('%s%s', s, fld.unsigned and ' unsigned' or '')
+	return _('%s%s%s', s,
+		fld.unsigned and ' unsigned' or '',
+		fld.pk and ' primary key' or '')
 end
 
 function schema:sql(o, dialect_name)
@@ -276,9 +281,9 @@ sc:def(function()
 	}
 
 	tables.session = {
-		token       , hash   , not_null,
+		token       , hash   , not_null, pk,
 		usr         , id     , not_null, fk(usr, cascade),
-		expires     , time   , not_null,pk,
+		expires     , time   , not_null,
 		clientip    , name   , --when it was created
 		ctime       , ctime  ,
 	}
