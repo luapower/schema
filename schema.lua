@@ -28,14 +28,14 @@ local function set_type(types, name, t)
 end
 
 local function apply_flag(sch, tbl, fld, flag)
-	local v
-	if isstr(flag) then
+	local v = flag --assume custom flag: table of attributes.
+	if isstr(flag) then --flag name: look it up.
 		v = sch.flags[flag]
 		if not v then
 			return nil, 'unknown flag `%s` for `%s.%s`', flag, tbl.name, fld.name
 		end
 	end
-	if isfunc(v) then --flag generator
+	if isfunc(v) then --flag is actually flag generator.
 		v = v(sch, tbl, fld)
 	end
 	return v or empty
@@ -56,11 +56,11 @@ local function set_table(tables, name, t)
 			assertf(istab(typ) and typ.istype, 'type for `%s.%s` is not a type', name, col)
 		end
 		i = i + 1
-		local fld = {name = col}
+		local fld = merge({name = col, isfield = true}, typ)
 		add(tbl.fields, fld)
 		while i <= #t do
 			local flag = t[i]
-			local attrs = apply_flag(tables.schema, tbl, fld, flag)
+			local attrs, err = apply_flag(tables.schema, tbl, fld, flag)
 			if not attrs then --next field or error
 				break
 			end
@@ -70,9 +70,12 @@ local function set_table(tables, name, t)
 		--apply flag generators from types after the more specific ones in the field.
 		if typ.flags then
 			for i, flag in ipairs(typ.flags) do
-				merge(fld, assertf(apply_flag(tables.schema, tbl, fld, flag)))
+				local attrs = assertf(apply_flag(tables.schema, tbl, fld, flag))
+				merge(fld, attrs)
 			end
 		end
+		fld.istype = nil
+		fld.flags = nil
 	end
 	tables._[name] = tbl
 	return tbl
@@ -132,6 +135,7 @@ schema.flags = {}
 
 function schema.flags.pk(sch, tbl, fld)
 	tbl.pk = imap(tbl.fields, 'name')
+	return empty
 end
 
 if not ... then --------------------------------------------------------------
@@ -184,6 +188,7 @@ end)
 
 sc:def(function()
 
+--[[
 	tables.usr = {
 		usr         , pk      ,
 		anonymous   , bool1   ,
@@ -216,6 +221,8 @@ sc:def(function()
 		clientip    , name   , --when it was created
 		ctime       , ctime  ,
 	}
+
+	]]
 
 	tables.usrtoken = {
 		token       , hash   , not_null, pk,
