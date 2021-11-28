@@ -18,15 +18,81 @@ Here's some reasons:
 
 * you want to generate SQL DDL scripts for different SQL dialects
 from a common structured format.
-* you want to diff between a live database and a master schema to find out 
+* you want to diff between a live database and a master schema to find out
 if the database is migrated properly.
 * you want to generate schema migrations (semi-)automatically.
 * you want to annotate table fields with extra information for use in
 data-bound widget toolkits like [x-widgets], and you don't want to do that
 off-band in a separate file.
-* you want a "shell" API for bulk DML ops like copying tables between 
+* you want a "shell" API for bulk DML ops like copying tables between
 different databases with different engines.
 * use it as a base for a scriptable ETL tool.
+
+## Example
+
+```lua
+function my_schema()
+
+	flags.not_null = {not_null = true, sql = 'not null'}
+	flags.unsigned = {unsigned = true, sql = 'unsigned'}
+	flags.autoinc  = {auto_increment = true, sql = 'auto increment'}
+
+	types.int  = {sql = 'int'}
+	types.str  = {sql = 'varchar({maxlen}){#charset} character set {charset}{/charset}'}
+	types.text = {sql = "text chracter set 'utf8'"}
+
+	types.id      = {int, unsigned}
+	types.auto_id = {id, not_null, pk, autoinc}
+	types.name    = {str, maxlen = 64, charset = 'utf8'}
+
+	tables.foo = {
+		foo_id , auto_id,
+		name   , name, not_null,
+		note   , text,
+	}
+
+	tables.bar = {
+		bar_id    , auto_id,
+		my_foo_id , id, not_null, fk(foo, restrict),
+	}
+
+end
+
+local sc = schema.new{}
+sc:def(my_schema)
+```
+
+### How this works / caveats
+
+#### TL;DR
+
+Always put schema definitions at the top of your script.
+
+#### Long version
+
+Using Lua for syntax instead of our own means that Lua's lexical rules apply,
+including lexical scoping which cannot be disabled, so there are some quirks
+to this that you have to know. Here's how this works:
+
+When calling `sc:def(my_schema)`, the function `my_schema` is run in an
+environment that resolves every unknown keyword to itself, so `foo_id`
+simply turns into `'foo_id'`. This is so that you don't have to quote field
+names. The price to pay for this convenience is the need define `my_schema`
+in a clean lexical scope, ideally at the top of your script before you
+declare a bunch of locals in the outer scope, otherwise those locals will
+get captured and your names will resolve to them instead of to themselves.
+If you don't want to put your schema definition at the top of your script
+for some reason, one simple way to fix an unwanted capture of an outer local
+is with an override: `local unsigned = 'unsigned'`.
+
+Another minor downside is that you cannot use globals inside `my_schema`
+directly, you'll have to _bring them into scope_ via locals. A DDL is mostly
+static however so you'd rarely need to do this, otherwise you can always
+extend `schema.env`.
+
+In the future, I might write a proper DSL based on [lx] that would avoid
+these issues completely, but the cost-benefit of that might be too low
+compared to this relatively simple and hackable implementation.
 
 ## API
 
@@ -35,3 +101,27 @@ different databases with different engines.
 --------------------------------- -------------------------------------------
 `schema.new(opt) -> sc`           create a new schema object
 --------------------------------- -------------------------------------------
+
+## Rationale
+
+This library came about when I needed to migrate an ecommerce database
+from MySQL to Tarantool, and I figured I would kill two birds with
+one stone, namely:
+
+* the need to migrate both schema and data automatically between engines.
+Keeping the schema in an engine-neutral format allows me to generate both
+DDL code for schema formatting in Tarantol, and also a table copy function
+that can copy data between engines.
+
+* the desire to keep extra field metadata in-band in the schema definition.
+Keeping that metadata separate would burden me to keep it in sync with the
+schema after schema refactorings (renaming columns, etc).
+
+* the desire to check if the schema on a bunch of databases in a cluster
+is up-to-date with the master schema, and generating schema migration
+commands (semi-)automatically. The "semi" part is because I'm not sure
+there's an algorithm to reliably tell the difference between a column
+rename and a column delete & add and other things like that.
+
+* minor things, like applying the `create table` statements in the right
+order including when circular dependencies from foreign keys are present.
