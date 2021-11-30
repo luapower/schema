@@ -9,10 +9,13 @@ require'$'
 
 --definition parsing ---------------------------------------------------------
 
-local schema = {isschema = true}
+local schema = {is_schema = true}
 
-local function isschema(t)
-	return istab(t) and t.isschema
+local function istype  (t) return istab(t) and t.is_type end
+local function isschema(t) return istab(t) and t.is_schema end
+
+local function parse_flag(schema, name, t)
+	return t
 end
 
 local function parse_type(schema, name, t)
@@ -20,11 +23,11 @@ local function parse_type(schema, name, t)
 	if isstr(super) then
 		super = assertf(schema.types[super], 'unknown super type `%s` for type `%s`', super, name)
 	elseif super then
-		assertf(istab(super) and super.istype, 'super type for type `%s` is not a type', name)
+		assertf(istype(super), 'super type for type `%s` is not a type', name)
 	end
 	local flags = extend({}, super and super.flags)
 	append(flags, unpack(t, 2))
-	local typ = merge({istype = true, ['is'..name] = true, flags = flags}, super)
+	local typ = merge({is_type = true, ['is_'..name] = true, flags = flags}, super)
 	for k,v in pairs(t) do
 		if not (isnum(k) and k >= 1) then
 			typ[k] = v
@@ -57,10 +60,10 @@ local function add_cols(schema, tbl, t)
 		if isstr(typ) then
 			typ = assertf(schema.types[typ], 'unknown type `%s` for `%s.%s`', typ, name, col)
 		else
-			assertf(istab(typ) and typ.istype, 'type for `%s.%s` is not a type', name, col)
+			assertf(istype(typ), 'type for `%s.%s` is not a type', name, col)
 		end
 		i = i + 1
-		local fld = merge({isfield = true, name = col}, typ)
+		local fld = merge({name = col}, typ)
 		add(tbl.fields, fld)
 		while i <= #t do
 			local flag = t[i]
@@ -78,12 +81,12 @@ local function add_cols(schema, tbl, t)
 				merge(fld, attrs)
 			end
 		end
-		fld.istype = nil
+		fld.is_type = nil
 		fld.flags = nil
 	end
 end
 local function parse_table(schema, name, t)
-	local tbl = {istable = true, name = name, fields = {}}
+	local tbl = {is_table = true, name = name, fields = {}}
 	add_cols(schema, tbl, t)
 	function tbl.add_cols(t)
 		add_cols(schema, tbl, t)
@@ -98,21 +101,31 @@ local function add_global(t, k, v)
 	rawset(t, k, v)
 end
 
-local function add_fk(tbl, cols, ref_tbl, ondelete, onupdate, suffix)
+local function cols(s, newsep)
+	return s:gsub('%s+', newsep or ',')
+end
+local function dename(s)
+	return s:gsub('`', '')
+end
+local function indexname(type, tbl, col, suffix)
+	return fmt('%s_%s__%s%s', type, dename(tbl), dename(cols(col, '_')))
+end
+
+local function add_fk(tbl, cols, ref_tbl, ondelete, onupdate)
 	local fks = attr(tbl, 'fks')
-	local k = _('fk_%s_%s%s', tbl.name, cat(cols, '_'), suffix or '')
+	local k = _('fk_%s__%s', tbl.name, cat(cols, '_'))
 	assertf(not fks[k], 'duplicate fk `%s`', k)
 	ref_tbl = ref_tbl or assert(#cols == 1 and cols[1])
-	fks[k] = {isfk = true, name = k, cols = cols,
+	fks[k] = {name = k, cols = cols,
 		ref_table = ref_tbl, ondelete = ondelete, onupdate = onupdate}
 	attr(tbl, 'deps')[ref_tbl] = true
 end
 
 local function add_ix(T, tbl, cols)
 	local t = attr(tbl, T..'s')
-	local k = _('%s_%s_%s', T, tbl.name, cat(cols, '_'))
+	local k = _('%s_%s__%s', T, tbl.name, cat(cols, '_'))
 	assertf(not t[k], 'duplicate %s `%s`', T, k)
-	t[k] = {['is'..T] = true, name = k, cols = cols}
+	t[k] = {['is_'..T] = true, name = k, cols = cols}
 end
 
 do
@@ -131,9 +144,10 @@ do
 		})
 	end
 	function schema.new(opt)
+		assert(opt ~= schema, 'use dot notation')
 		local self = update(opt or {}, schema)
 		local env = update({}, schema.env)
-		init(self, env, 'flags' , pass)
+		init(self, env, 'flags' , parse_flag)
 		init(self, env, 'types' , parse_type)
 		init(self, env, 'tables', parse_table)
 		local function resolve_symbol(t, k)
@@ -153,11 +167,11 @@ do
 end
 
 do
-	local function import(k, sc, sc1)
+	local function import(self, k, sc)
 		local k1 = k:gsub('s$', '')
-		for k,v in pairs(sc1[k]) do
-			assertf(not sc[k], 'duplicate %s `%s`', k1, k)
-			sc[k] = v
+		for k,v in pairs(sc[k]) do
+			assertf(not self[k], 'duplicate %s `%s`', k1, k)
+			self[k] = v
 		end
 	end
 	function schema:import(src)
@@ -168,9 +182,9 @@ do
 			self:def(src)
 		elseif isschema(src) then --schema
 			if not self.loaded[src] then
-				import('flags' , self, sc)
-				import('types' , self, sc)
-				import('tables', self, sc)
+				import(self, 'flags' , sc)
+				import(self, 'types' , sc)
+				import(self, 'tables', sc)
 				self.loaded[src] = true
 			end
 		else
@@ -192,33 +206,27 @@ end
 schema.env = {}
 schema.flags = {}
 
-local function enum_mysql(dialect, fld)
-	local function str(s) dialect:sqlstring(s) end
-	return _('enum(%s)', cat(imap(fld.enum_values, str), ', '))
-end
 function schema.env.enum(...)
 	local vals = names(cat({...}, ' '))
-	return {istype = true, isenum = true, enum_values = vals, mysql = enum_mysql}
+	return {is_type = true, isenum = true, enum_values = vals}
 end
 
 do
-	local function fk_func(suffix, force_onupdate)
+	local function fk_func(force_onupdate)
 		return function(arg1, ...)
 			if isschema(arg1) then --used as flag.
 				local sch, tbl, fld = arg1, ...
-				add_fk(tbl, {fld.name}, nil, force_onupdate, nil, suffix)
+				add_fk(tbl, {fld.name}, nil, force_onupdate)
 			else --called by user, return a flag generator.
 				local ref_tbl, ondelete, onupdate = arg1, ...
 				return function(sch, tbl, fld)
-					add_fk(tbl, {fld.name}, ref_tbl, ondelete, force_onupdate or onupdate, suffix)
+					add_fk(tbl, {fld.name}, ref_tbl, ondelete, force_onupdate or onupdate)
 				end
 			end
 		end
 	end
-	schema.env.fk        = fk_func(nil)
-	schema.env.fk2       = fk_func('2')
-	schema.env.child_fk  = fk_func(nil, 'cascade')
-	schema.env.child_fk2 = fk_func('2', 'cascade')
+	schema.env.fk       = fk_func()
+	schema.env.child_fk = fk_func'cascade'
 end
 
 function schema:add_fk(tbl, cols, ...)
@@ -252,9 +260,6 @@ end
 function schema.flags.pk(sch, tbl, fld)
 	assertf(not tbl.pk, 'pk already applied for table `%s`', tbl.name)
 	tbl.pk = imap(tbl.fields, 'name')
-	if #tbl.fields == 1 then
-		tbl.fields[1].pk = true
-	end
 	if sch.flags.not_null then
 		for _,fld in ipairs(tbl.fields) do
 			merge(fld, resolve_flag(sch, tbl, fld, 'not_null'))
@@ -341,147 +346,74 @@ function schema:table_create_order()
 	end)
 end
 
---SQL formatting -------------------------------------------------------------
+--schema diff'ing ------------------------------------------------------------
 
-schema.dialects = {mysql = {}, tarantool = {}}
-
-function schema.dialects.mysql:sqlname(s)
-	return s
-end
-
-function schema.dialects.mysql:sqlstring(s)
-	return "'"..s.."'"
-end
-
-function schema.dialects.mysql:sqltype(fld)
-	assertf(fld.mysql, 'mysql property missing for field `%s`', fld.name)
-	local s, missing
-	if isfunc(fld.mysql) then
-		s = fld.mysql(self, fld)
-	else
-		s, missing = subst(fld.mysql, fld, true)
-		if missing then
-			error(_('field `%s` is missing `%s`', fld.name, cat(missing, ', ')))
+local function diff(t1, t2, diff_vals) --update t2 with differences from t1.
+	local dt = {}
+	for k,v1 in sortedpairs(t1) do
+		local v2 = t2[k]
+		if v2 == nil then
+			add(dt, {'add', k, v1})
+		elseif cmp then
+			local vdt = diff_vals(v1, v2)
+			if vdt then
+				add(dt, {'update', k, vdt})
+			end
 		end
 	end
-	return _('%s%s%s', s,
-		fld.unsigned and ' unsigned' or '',
-		fld.pk and ' primary key' or '')
+	for k,v2 in sortedpairs(t2) do
+		local v1 = t1[k]
+		if v1 == nil then
+			add(dt, {'remove', k})
+		end
+	end
+	return #dt > 0 and dt or nil
 end
 
-function schema:sql(o, dialect_name)
+function schema:diff_tables(t1, t2, renames)
+	renames = renames or empty
+	local dt = {}
+	local function diff_fields(f1, f2)
+
+	end
+	local fdt = diff(t1.fields, t2.fields, diff_fields)
+	if fdt then
+		add(dt, {'fields', fdt})
+	end
+	if cat(t1.pk, '\0') ~= cat(t2.pk, '\0') then
+		add(dt, {'pk', t1.pk})
+	end
+	local ukt = diff(t1.uks, t2.uks); if ukt then add(dt, {'uks', ukt}) end
+	local fkt = diff(t1.fks, t2.fks); if fkt then add(dt, {'fks', fkt}) end
+	local ixt = diff(t1.ixs, t2.ixs); if ixt then add(dt, {'ixs', fkt}) end
+	return #dt > 0 and dt or nil
+end
+
+function schema:diff(sc2, opt)
+	sc1 = self
+	sc2 = sc2 or schema.new()
+	local dt = {is_diff = true}
+	local function diff_tables(t1, t2)
+		--return self:diff_tables(t1, t2, opt.table_renames)
+	end
+	dt.tables = diff(sc1.tables, sc2.tables, diff_tables)
+	return dt
+	--[[
 	if not o then
 		local t = {}
 		local tbls, circular_deps = self:table_create_order()
 		pp(circular_deps)
 		for _,tbl in ipairs(tbls) do
-			add(t, self:sql(self.tables[tbl], dialect_name))
+			add(t, self:sql(self.tables[tbl], cn))
 		end
 		return cat(t, ';\n')
 	end
-	dialect_name = dialect_name or self.dialect
-	local dialect = assertf(self.dialects[dialect_name], 'unknown dialect `%s`', dialect_name)
-	local function sqlname(s) return dialect:sqlname(s) end
-	local function cols(t) return cat(imap(t, sqlname), ', ') end
-	if o.istable then
-
-		local t = {}
-		for i,fld in ipairs(o.fields) do
-			local s = self:sql(fld, nil, dialect_name)
-			add(t, s)
-		end
-		local fields = cat(t, ',\n\t')
-
-		local pk = o.pk and #o.pk > 1 and _(',\n\tprimary key (%s)', cols(o.pk)) or ''
-
-		local fks
-		if o.fks then
-			fks = {}
-			for _,fk in pairs(o.fks) do
-				local ondelete = fk.ondelete or 'restrict'
-				local onupdate = fk.onupdate or 'cascade'
-				local a1 = ondelete ~= 'restrict' and ' on delete '..ondelete or ''
-				local a2 = onupdate ~= 'restrict' and ' on update '..onupdate or ''
-				local ref_tbl = assertf(self.tables[fk.ref_table], 'unknown ref table `%s`', fk.ref_table)
-				local ref_cols = cols(ref_tbl.pk)
-				local s = fmt('constraint %s foreign key (%s) references %s (%s)%s%s',
-					fk.name, cols(fk.cols), sqlname(fk.ref_table), ref_cols, a1, a2)
-				add(fks, s)
-			end
-			fks = ',\n\t'..cat(fks, ',\n\t') or ''
-		end
-
-		return _('%s (\n\t%s%s%s\n)', o.name, fields, pk, fks)
-	elseif o.isfield then
-		return _('%-16s %s', dialect:sqlname(o.name), dialect:sqltype(o))
+	if o.is_table then
+		return cn:sqlschema(o)
 	else
 		error'NYI'
 	end
-end
-
---mysql schema loading -------------------------------------------------------
-
-local std_type = {
-	bigint      = 'int64',
-	binary      = '',
-	blob        = '',
-	char        = '',
-	date        = '',
-	datetime    = '',
-	decimal     = '',
-	double      = '',
-	enum        = '',
-	float       = '',
-	int         = '',
-	json        = '',
-	longblob    = '',
-	longtext    = '',
-	mediumblob  = '',
-	mediumint   = '',
-	mediumtext  = '',
-	set         = '',
-	smallint    = '',
-	text        = '',
-	time        = '',
-	timestamp   = '',
-	tinyint     = '',
-	varbinary   = '',
-	varchar     = '',
-}
-
-function schema:mysql_load(cn, schema)
-	local row, err = cn:query(_([[
-		select
-			t.table_name tbl,
-			c.column_name col,
-			c.data_type,
-		from
-			information_schema.tables t
-			inner join information_schema.columns c
-				on c.table_schema = t.table_schema
-				and c.table_name = t.table_name
-		where
-			t.table_schema = '%s'
-	]], cn:esc(schema)))
-
-	if not res then
-		return nil, err
-	end
-
-	for _,row in ipairs(rows) do
-		local tbl = self.tables[row.tbl]
-		if not tbl then
-			tbl = {istable = true, name = row.tbl, fields = {}}
-			self.tables[row.tbl] = tbl
-		end
-		local typ = std_type[row.data_type]
-		local typ = assertf(self.types[typ], 'no field type for mysql type `%s`', row.data_type)
-		local fld = merge({
-			isfield = true,
-			name = row.col,
-		}, typ)
-		tbl.fields[row.col] = fld
-	end
+	]]
 end
 
 return schema
