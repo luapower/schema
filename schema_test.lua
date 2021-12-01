@@ -50,7 +50,7 @@ webb.run(function()
 			collation = 'server',
 		})
 
-		local sc = cn:extract_schema('sp.*')
+		local sc = cn:extract_schema('sp')
 
 		local diff = sc:diff()
 		print(cat(cn:sqldiff(diff), ';\n\n'))

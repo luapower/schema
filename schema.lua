@@ -94,10 +94,15 @@ local function parse_table(schema, name, t)
 	return tbl
 end
 
+local function parse_proc(schema, name, t)
+	return t
+end
+
 local function add_global(t, k, v)
 	assertf(not t.flags [k], 'global overshadows flag `%s`', k)
 	assertf(not t.types [k], 'global overshadows type `%s`', k)
 	assertf(not t.tables[k], 'global overshadows table `%s`', k)
+	assertf(not t.procs [k], 'global overshadows proc `%s`', k)
 	rawset(t, k, v)
 end
 
@@ -150,6 +155,7 @@ do
 		init(self, env, 'flags' , parse_flag)
 		init(self, env, 'types' , parse_type)
 		init(self, env, 'tables', parse_table)
+		init(self, env, 'procs' , parse_proc)
 		local function resolve_symbol(t, k)
 			return k --symbols resolve to their name as string.
 		end
@@ -393,27 +399,15 @@ function schema:diff(sc2, opt)
 	sc1 = self
 	sc2 = sc2 or schema.new()
 	local dt = {is_diff = true}
-	local function diff_tables(t1, t2)
+	local function diff_table(t1, t2)
 		--return self:diff_tables(t1, t2, opt.table_renames)
 	end
-	dt.tables = diff(sc1.tables, sc2.tables, diff_tables)
+	dt.tables = diff(sc1.tables, sc2.tables, diff_table)
+	local function diff_proc(p1, p2)
+		--
+	end
+	dt.procs = diff(sc1.procs, sc2.procs, diff_proc)
 	return dt
-	--[[
-	if not o then
-		local t = {}
-		local tbls, circular_deps = self:table_create_order()
-		pp(circular_deps)
-		for _,tbl in ipairs(tbls) do
-			add(t, self:sql(self.tables[tbl], cn))
-		end
-		return cat(t, ';\n')
-	end
-	if o.is_table then
-		return cn:sqlschema(o)
-	else
-		error'NYI'
-	end
-	]]
 end
 
 return schema
