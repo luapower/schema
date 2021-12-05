@@ -175,7 +175,7 @@ local function add_ix(T, tbl, cols)
 	local t = attr(tbl, T..'s')
 	local k = _('%s_%s__%s', T, tbl.name, cat(cols, '_'))
 	assertf(not t[k], 'duplicate %s `%s`', T, k)
-	t[k] = {name = k, cols = cols}
+	t[k] = cols
 end
 
 do
@@ -420,7 +420,8 @@ local function map_fields(flds)
 	return t
 end
 
-local function diff_maps(self, t1, t2, diff_vals, map) --sync t2 to t1.
+local function diff_maps(self, t1, t2, diff_vals, map, sc2, supported) --sync t2 to t1.
+	if supported == false then return nil end
 	t1 = t1 and (map and map(t1) or t1) or empty
 	t2 = t2 and (map and map(t2) or t2) or empty
 	local dt = {}
@@ -435,7 +436,7 @@ local function diff_maps(self, t1, t2, diff_vals, map) --sync t2 to t1.
 		if v2 == nil then
 			attr(dt, 'add')[k] = v1
 		elseif diff_vals then
-			local vdt = diff_vals(self, v1, v2)
+			local vdt = diff_vals(self, v1, v2, sc2)
 			if vdt == true then
 				attr(dt, 'remove')[k] = true
 				attr(dt, 'add'   )[k] = v1
@@ -463,23 +464,8 @@ local function diff_keys(self, t1, t2, keys)
 	return next(dt) and {old = t2, new = t1, changed = dt}
 end
 
-local function diff_fields(self, f1, f2)
-	return diff_keys(self, f1, f2, {
-		digits=1,
-		decimals=1,
-		size=1,
-		charsize=1,
-		display_width=1,
-		unsigned=1,
-		not_null=1,
-		auto_increment=1,
-		default=1,
-		comment=1,
-		[self.engine..'_type']=1,
-		[self.engine..'_charset']=1,
-		[self.engine..'_collation']=1,
-		[self.engine..'_default']=1,
-	})
+local function diff_fields(self, f1, f2, sc2)
+	return sc2.compare_fields(f1, f2)
 end
 
 local function diff_ixs(self, ix1, ix2)
@@ -510,24 +496,24 @@ local function diff_triggers(self, t1, t2)
 	})
 end
 
-local function diff_procs(self, p1, p2)
+local function diff_procs(self, p1, p2, sc2)
 	return diff_keys(self, p1, p2, {
 		[self.engine..'_body']=1,
 		args=function(self, a1, a2)
-			return diff_maps(self, a1, a2, diff_fields, map_fields) and true
+			return diff_maps(self, a1, a2, diff_fields, map_fields, sc2) and true
 		end,
 	})
 end
 
-local function diff_tables(self, t1, t2)
+local function diff_tables(self, t1, t2, sc2)
 	local d = {}
-	d.fields   = diff_maps(self, t1.fields  , t2.fields  , diff_fields, map_fields)
-	local pk   = diff_maps(self, {pk=t1.pk} , {pk=t2.pk} , diff_col_lists)
-	d.uks      = diff_maps(self, t1.uks     , t2.uks     , diff_col_lists)
-	d.ixs      = diff_maps(self, t1.ixs     , t2.ixs     , diff_ixs)
-	d.fks      = diff_maps(self, t1.fks     , t2.fks     , diff_fks)
-	d.checks   = diff_maps(self, t1.checks  , t2.checks  , diff_checks)
-	d.triggers = diff_maps(self, t1.triggers, t2.triggers, diff_triggers)
+	d.fields   = diff_maps(self, t1.fields  , t2.fields  , diff_fields   , map_fields, sc2)
+	local pk   = diff_maps(self, {pk=t1.pk} , {pk=t2.pk} , diff_col_lists, nil, sc2)
+	d.uks      = diff_maps(self, t1.uks     , t2.uks     , diff_col_lists, nil, sc2)
+	d.ixs      = diff_maps(self, t1.ixs     , t2.ixs     , diff_ixs      , nil, sc2)
+	d.fks      = diff_maps(self, t1.fks     , t2.fks     , diff_fks      , nil, sc2, sc2.supports_all or sc2.supports_fks      or false)
+	d.checks   = diff_maps(self, t1.checks  , t2.checks  , diff_checks   , nil, sc2, sc2.supports_all or sc2.supports_checks   or false)
+	d.triggers = diff_maps(self, t1.triggers, t2.triggers, diff_triggers , nil, sc2, sc2.supports_all or sc2.supports_triggers or false)
 	d.add_pk    = pk and pk.add and pk.add.pk
 	d.remove_pk = pk and pk.remove and pk.remove.pk
 	if not next(d) then return nil end
@@ -540,41 +526,85 @@ local diff = {is_diff = true}
 
 function schema:diff(sc2, opt) --sync sc2 to sc1.
 	sc1 = self
-	sc2 = sc2 or schema.new()
+	sc2 = sc2 or schema.new{engine = opt.engine, supports_all = true}
 	sc1:check_refs()
 	sc2:check_refs()
 	local self = {engine = sc2.engine, __index = diff}
-	self.tables = diff_maps(self, sc1.tables, sc2.tables, diff_tables)
-	self.procs  = diff_maps(self, sc1.procs , sc2.procs , diff_procs)
+	self.tables = diff_maps(self, sc1.tables, sc2.tables, diff_tables, nil, sc2)
+	self.procs  = diff_maps(self, sc1.procs , sc2.procs , diff_procs , nil, sc2, sc2.supports_all or sc2.supports_procs or false)
 	return setmetatable(self, self)
 end
 
-function diff:pp()
+local function dots(s, n) return #s > n and s:sub(1, n-2)..'..' or s end
+local function bigsize(n)
+	if not n then return end
+	local e = ln(n + 1) / ln(2)
+	if floor(e) == e then return '2^'..floor(e) end
+	return n
+end
+function diff:pp(opt)
 	if self.tables and self.tables.add then
-		for tbl_name, tbl in sortedpairs(self.tables) do
-			print('NEW TABLE', tbl_name)
-			print'--------------------------------------------'
-			pp(tbl)
+		for tbl_name, tbl in sortedpairs(self.tables.add) do
+			print(_('%-18s %-8s %2s,%-1s%1s %8s %8s', 'TABLE '..tbl_name,
+				'type', 'D', 'd', '-', 'size', 'maxlen'))
+			print(('-'):rep(78))
 			for i,fld in ipairs(tbl.fields) do
-				print(_(' %-16s %s', fld.col, pp.format(fld)))
+				print(_('  %-16s %-8s %4s%1s %8s %8s',
+					dots(fld.col, 16), fld.type or '',
+					fld.type == 'number' and not fld.digits and '['..fld.size..']'
+					or fld.type == 'bool' and ''
+					or (fld.digits or '')..(fld.decimals and ','..fld.decimals or ''),
+					fld.type == 'number' and not fld.unsigned and '-' or '',
+					bigsize(fld.size) or '', bigsize(fld.maxlen) or ''))
 			end
-			pp('UKS', tbl.uks)
-			pp('IXS', tbl.ixs)
-			pp('FKS', tbl.fks)
-			pp('CKS', tbl.checks)
-			pp('TGS', tbl.triggers)
+			if tbl.uks then
+				for uk_name, uk in sortedpairs(tbl.uks) do
+					print(_('  * UK %s', cat(uk, ' ')))
+				end
+			end
+			if tbl.ixs then
+				for ix_name, ix in sortedpairs(tbl.ixs) do
+					print(_('  * IX %s%s', cat(ix, ' '), ix.desc and ' desc' or ''))
+				end
+			end
+			if tbl.fks then
+				for fk_name, fk in sortedpairs(tbl.fks) do
+					print(_('  * FK %s -> %s (%s)',
+						cat(fk.cols, ' '), fk.ref_table, cat(fk.ref_cols, ' ')))
+				end
+			end
+			if tbl.checks then
+				for ck_name, ck in sortedpairs(tbl.checks) do
+					print(_('  * CK %s', ck[self.engine..'_body'] or ck.body))
+				end
+			end
+			if tbl.triggers then
+				for tg_name, tg in sortedpairs(tbl.triggers) do
+					print(_('  * TG %s', tg[self.engine..'_body'] or tg.body))
+				end
+			end
 			print()
 		end
 	end
 	if self.tables and self.tables.update then
+		local hide_attrs = opt and opt.hide_attrs
 		for tbl_name, d in sortedpairs(self.tables.update) do
 			print('TABLE CHANGED', tbl_name)
-			print'--------------------------------------------'
+			print(('-'):rep(78))
 			if d.fields and d.fields.update then
-				for col, d in pairs(d.fields.update) do
-					print(_('  %-16s', col))
+				for col, d in sortedpairs(d.fields.update) do
+					local dt = {}
 					for k in sortedpairs(d.changed) do
-						print(_('    %-16s %s->%s', k, d.old[k], d.new[k]))
+						if not hide_attrs or not hide_attrs[k] then
+							add(dt, _('    %-16s %s -> %s', k,
+								pp.format(d.old[k]),
+								pp.format(d.new[k])
+							))
+						end
+					end
+					if #dt > 0 then
+						print(_('  %-16s', col))
+						imap(dt, print)
 					end
 				end
 			end

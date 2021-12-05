@@ -52,8 +52,10 @@ webb.run(function()
 		--pp(sc.tables.addr)
 		--pp(sc.procs)
 
-		local diff = sc:diff(dbsc)
-		diff:pp()
+		local diff = sc:diff(dbsc) --schema.new{engine = 'mysql'})
+		diff:pp{
+			hide_attrs = {mysql_collation=1, mysql_default=1},
+		}
 		--pp(diff)
 		--pp(diff.tables.update.addr.fields.update.note)
 		--pp(diff.tables.update.addr.fields.remove.note)
