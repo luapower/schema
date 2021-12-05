@@ -9,7 +9,7 @@ require'$'
 
 --definition parsing ---------------------------------------------------------
 
-local schema = {is_schema = true}
+local schema = {is_schema = true, package = {}}
 
 local function istype  (t) return istab(t) and t.is_type end
 local function isschema(t) return istab(t) and t.is_schema end
@@ -18,83 +18,116 @@ local function parse_flag(schema, name, t)
 	return t
 end
 
-local function parse_type(schema, name, t)
+local function parse_type(self, name, t)
 	local super = t[1]
 	if isstr(super) then
-		super = assertf(schema.types[super], 'unknown super type `%s` for type `%s`', super, name)
+		super = assertf(self.types[super], 'unknown super type `%s` for type `%s`', super, name)
 	elseif super then
 		assertf(istype(super), 'super type for type `%s` is not a type', name)
 	end
 	local flags = extend({}, super and super.flags)
 	append(flags, unpack(t, 2))
-	local typ = merge({is_type = true, ['is_'..name] = true, flags = flags}, super)
+	local typ = merge({is_type = true, flags = flags}, super)
 	for k,v in pairs(t) do
 		if not (isnum(k) and k >= 1) then
 			typ[k] = v
 		end
 	end
+	self.env.lower_type(self, typ) --not yet used, but cuould be useful.
 	return typ
 end
 
-local function resolve_flag(sch, tbl, fld, flag)
+local function resolve_flag(self, flag, loc1, loc2, fld_ct, fld)
 	local v = flag --assume custom flag: table of attributes.
 	if isstr(flag) then --flag name: look it up.
-		v = sch.flags[flag]
+		v = self.flags[flag]
 		if not v then
-			return nil, 'unknown flag `%s` for `%s.%s`', flag, tbl.name, fld.name
+			return nil, 'unknown flag `%s` at `%s.%s`', flag, loc1, loc2
 		end
 	end
 	if isfunc(v) then --flag is actually flag generator.
-		v = v(sch, tbl, fld)
+		v = v(self, fld_ct, fld)
 	end
 	return v or empty
 end
 
-local function add_cols(schema, tbl, t)
+local function add_cols(self, t, dt, loc1, fld_ct)
 	local i = 1
 	while i <= #t do --field_name, field_type, field_flag|field_attrs, ...
-		local col = t[i]
-		assertf(isstr(col), 'column name expected for `%s`, got %s', name, type(col))
+		local col, mode
+		if not fld_ct.is_table then --proc param
+			mode = t[i]
+			if mode == 'out' then
+				i = i + 1
+			else
+				mode = nil --'in' (default)
+			end
+		end
+		col = t[i]
+		assertf(isstr(col), 'column name expected for `%s`, got %s', loc1, type(col))
 		i = i + 1
 		local typ = t[i]
 		if isstr(typ) then
-			typ = assertf(schema.types[typ], 'unknown type `%s` for `%s.%s`', typ, name, col)
+			typ = assertf(self.types[typ], 'unknown type `%s` for `%s.%s`', typ, loc1, col)
 		else
-			assertf(istype(typ), 'type for `%s.%s` is not a type', name, col)
+			assertf(istype(typ), 'type for `%s.%s` is not a type', loc1, col)
 		end
 		i = i + 1
-		local fld = merge({name = col}, typ)
-		add(tbl.fields, fld)
+		local fld = {col = col, mode = mode, col_index = #dt + 1}
+		add(dt, fld)
+		--apply type attrs.
+		update(fld, typ)
+		--apply flags from type def.
+		if typ.flags then
+			for i, flag in ipairs(typ.flags) do
+				local attrs = assertf(resolve_flag(self, flag, loc1, col, fld_ct, fld))
+				update(fld, attrs)
+			end
+		end
+		--apply flags from field def.
 		while i <= #t do
 			local flag = t[i]
-			local attrs = resolve_flag(schema, tbl, fld, flag)
+			local attrs = resolve_flag(self, flag, loc1, col, fld_ct, fld)
 			if not attrs then --next field or error
 				break
 			end
 			update(fld, attrs)
 			i = i + 1
 		end
-		--apply flag generators from types after the more specific ones in the field.
-		if typ.flags then
-			for i, flag in ipairs(typ.flags) do
-				local attrs = assertf(resolve_flag(schema, tbl, fld, flag))
-				merge(fld, attrs)
-			end
-		end
 		fld.is_type = nil
 		fld.flags = nil
 	end
 end
-local function parse_table(schema, name, t)
+local function parse_table(self, name, t)
 	local tbl = {is_table = true, name = name, fields = {}}
-	add_cols(schema, tbl, t)
+	add_cols(self, t, tbl.fields, name, tbl)
 	function tbl.add_cols(t)
-		add_cols(schema, tbl, t)
+		add_cols(self, t, tbl.fields, name, tbl)
+	end
+	--resolve fks that ref this table.
+	local fks = self.table_refs and self.table_refs[name]
+	if fks then
+		for fk in pairs(fks) do
+			fk.ref_cols = tbl.pk
+			--add convenience ref fields for automatic lookup.
+			--TODO: move this to xrowset_sql.
+			if #fk.cols == 1 then
+				local fk_tbl = fk.table == name and tbl or self.tables[fk.table]
+				local fk_col = fk.cols[1]
+				for _, fld in ipairs(fk_tbl.fields) do
+					if fld.col == fk_col then
+						fld.ref_table = name
+						fld.ref_col   = tbl.pk[1]
+					end
+				end
+			end
+		end
+		self.table_refs[name] = nil
 	end
 	return tbl
 end
 
-local function parse_proc(schema, name, t)
+local function parse_proc(self, name, t)
 	return t
 end
 
@@ -116,21 +149,33 @@ local function indexname(type, tbl, col, suffix)
 	return fmt('%s_%s__%s%s', type, dename(tbl), dename(cols(col, '_')))
 end
 
-local function add_fk(tbl, cols, ref_tbl, ondelete, onupdate)
+local function add_fk(self, tbl, cols, ref_tbl, ondelete, onupdate, fld)
 	local fks = attr(tbl, 'fks')
 	local k = _('fk_%s__%s', tbl.name, cat(cols, '_'))
 	assertf(not fks[k], 'duplicate fk `%s`', k)
 	ref_tbl = ref_tbl or assert(#cols == 1 and cols[1])
-	fks[k] = {name = k, cols = cols,
+	local fk = {table = tbl.name, cols = cols,
 		ref_table = ref_tbl, ondelete = ondelete, onupdate = onupdate}
+	fks[k] = fk
 	attr(tbl, 'deps')[ref_tbl] = true
+	local ref_tbl_t = self.tables[ref_tbl]
+	if ref_tbl_t then
+		fk.ref_cols = ref_tbl_t.pk
+		--TODO: move this to xrowset_sql.
+		if fld then
+			fld.ref_table = ref_tbl
+			fld.ref_col   = ref_tbl_t.pk[1]
+		end
+	else --we'll resolve it when the table is defined later.
+		attr(attr(self, 'table_refs'), ref_tbl)[fk] = true
+	end
 end
 
 local function add_ix(T, tbl, cols)
 	local t = attr(tbl, T..'s')
 	local k = _('%s_%s__%s', T, tbl.name, cat(cols, '_'))
 	assertf(not t[k], 'duplicate %s `%s`', T, k)
-	t[k] = {['is_'..T] = true, name = k, cols = cols}
+	t[k] = {name = k, cols = cols}
 end
 
 do
@@ -151,7 +196,7 @@ do
 	function schema.new(opt)
 		assert(opt ~= schema, 'use dot notation')
 		local self = update(opt or {}, schema)
-		local env = update({}, schema.env)
+		local env = update({self = self}, schema.env)
 		init(self, env, 'flags' , parse_flag)
 		init(self, env, 'types' , parse_type)
 		init(self, env, 'tables', parse_table)
@@ -165,8 +210,8 @@ do
 
 		function env.import      (...) self:import      (...) end
 		function env.add_fk      (...) self:add_fk      (...) end
-		function env.add_proc    (...) self:add_proc    (...) end
-		function env.add_trigger (...) self:add_trigger (...) end
+		function env.trigger     (...) self:add_trigger (...) end
+		function env.proc        (...) self:add_proc    (...) end
 
 		return self
 	end
@@ -182,17 +227,24 @@ do
 	end
 	function schema:import(src)
 		if isstr(src) then --module
-			src = require(src)
+			src = schema.package[src] or require(src)
 		end
 		if isfunc(src) then --def
-			self:def(src)
+			if not self.loaded[src] then
+				setfenv(src, self.env)
+				src()
+				self.loaded[src] = true
+			end
 		elseif isschema(src) then --schema
 			if not self.loaded[src] then
 				import(self, 'flags' , sc)
 				import(self, 'types' , sc)
 				import(self, 'tables', sc)
+				import(self, 'procs' , sc)
 				self.loaded[src] = true
 			end
+		elseif istab(src) then --plain table: use as environsment.
+			update(self.env, src)
 		else
 			assert(false)
 		end
@@ -200,47 +252,37 @@ do
 	end
 end
 
-function schema:def(f)
-	if not self.loaded[f] then
-		setfenv(f, self.env)
-		f()
-		self.loaded[f] = true
-	end
-	return self
-end
-
-schema.env = {}
+schema.env = {lower_type = noop, _G = _G}
 schema.flags = {}
 
-function schema.env.enum(...)
-	local vals = names(cat({...}, ' '))
-	return {is_type = true, isenum = true, enum_values = vals}
-end
-
 do
-	local function fk_func(force_onupdate)
+	local function fk_func(force_ondelete, force_onupdate)
 		return function(arg1, ...)
 			if isschema(arg1) then --used as flag.
-				local sch, tbl, fld = arg1, ...
-				add_fk(tbl, {fld.name}, nil, force_onupdate)
+				local self, tbl, fld = arg1, ...
+				add_fk(self, tbl, {fld.col}, nil,
+					force_ondelete,
+					force_onupdate,
+					fld)
 			else --called by user, return a flag generator.
 				local ref_tbl, ondelete, onupdate = arg1, ...
-				return function(sch, tbl, fld)
-					add_fk(tbl, {fld.name}, ref_tbl, ondelete, force_onupdate or onupdate)
+				return function(self, tbl, fld)
+					add_fk(self, tbl, {fld.col}, ref_tbl,
+						force_ondelete or ondelete,
+						force_onupdate or onupdate,
+						fld)
 				end
 			end
 		end
 	end
 	schema.env.fk       = fk_func()
 	schema.env.child_fk = fk_func'cascade'
+	schema.env.weak_fk  = fk_func'set null'
 end
 
 function schema:add_fk(tbl, cols, ...)
 	local tbl = assertf(self.tables[tbl], 'unknown table `%s`', tbl)
-	add_fk(tbl, names(cols), ...)
-end
-function schema:add_fk2(tbl, cols, ref_tbl, ondelete, onupdate)
-	return self:add_fk(tbl, cols, ondelete, onupdate, '2')
+	add_fk(self, tbl, names(cols), ...)
 end
 
 do
@@ -248,12 +290,12 @@ do
 		return function(arg1, ...)
 			if isschema(arg1) then --used as flag.
 				local sch, tbl, fld = arg1, ...
-				add_ix(T, tbl, {fld.name})
+				add_ix(T, tbl, {fld.col})
 				fld[T] = true
 			else --called by user, return a flag generator.
 				local cols = names(cat({arg1, ...}, ' '))
 				return function(sch, tbl, fld)
-					if #cols == 0 then cols = {fld.name} end
+					if #cols == 0 then cols = {fld.col} end
 					add_ix(T, tbl, cols)
 				end
 			end
@@ -263,12 +305,12 @@ do
 	schema.env.ix = ix_func'ix'
 end
 
-function schema.flags.pk(sch, tbl, fld)
+function schema.flags.pk(self, tbl, fld)
 	assertf(not tbl.pk, 'pk already applied for table `%s`', tbl.name)
-	tbl.pk = imap(tbl.fields, 'name')
-	if sch.flags.not_null then
+	tbl.pk = imap(tbl.fields, 'col')
+	if self.flags.not_null then --apply `not_null` flag to all fields up to this.
 		for _,fld in ipairs(tbl.fields) do
-			merge(fld, resolve_flag(sch, tbl, fld, 'not_null'))
+			merge(fld, resolve_flag(self, 'not_null', tbl.name, fld.col, tbl, fld))
 		end
 	end
 end
@@ -277,18 +319,29 @@ function schema.env.default(v)
 	return {default = v}
 end
 
-function schema.env.check(name)
-	return function(code)
-		return {ischeck = true, name = 'ck_'..name, code = code}
+function schema.env.check(body)
+	return function(self, tbl, fld)
+		local name = _('ck_%s__%s', tbl.name, fld.col)
+		local ck = {}
+		if istab(body) then
+			update(ck, body) --mysql'...'
+		else
+			ck.body = body
+		end
+		attr(tbl, 'checks')[name] = ck
 	end
 end
 
-function schema:add_proc(...)
-	--TODO:
+function schema:add_trigger(name, when, op, tbl_name, ...)
+	local tbl = assertf(self.tables[tbl_name], 'unknown table `%s`', tbl_name)
+	attr(tbl, 'triggers')[name] = update({name = name, when = when, op = op, table = tbl_name}, ...)
 end
 
-function schema:add_trigger(...)
-	--TODO:
+function schema:add_proc(name, args, ...)
+	local p = {name = name, args = {}}
+	add_cols(self, args, p.args, name, p)
+	update(p, ...)
+	self.procs[name] = p
 end
 
 function schema:add_cols(...)
@@ -301,7 +354,7 @@ schema.env.null = function() end
 
 local function dependency_order(items, item_deps)
 	local function dep_maps()
-		local t = {} --{item->{dep_item->true}
+		local t = {} --{item->{dep_item->true}}
 		local function add_item(item)
 			if t[item] then return true end --already added
 			local deps = item_deps(item)
@@ -352,62 +405,190 @@ function schema:table_create_order()
 	end)
 end
 
+function schema:check_refs()
+	if not self.table_refs or not next(self.table_refs) then return end
+	assertf(false, 'unresolved refs to tables: %s', keys(self.table_refs, true))
+end
+
 --schema diff'ing ------------------------------------------------------------
 
-local function diff(t1, t2, diff_vals) --update t2 with differences from t1.
+local function map_fields(flds)
+	local t = {}
+	for i,fld in ipairs(flds) do
+		t[fld.col] = fld
+	end
+	return t
+end
+
+local function diff_maps(self, t1, t2, diff_vals, map) --sync t2 to t1.
+	t1 = t1 and (map and map(t1) or t1) or empty
+	t2 = t2 and (map and map(t2) or t2) or empty
 	local dt = {}
-	for k,v1 in sortedpairs(t1) do
+	for k,v2 in pairs(t2) do
+		local v1 = t1[k]
+		if v1 == nil then
+			attr(dt, 'remove')[k] = true
+		end
+	end
+	for k,v1 in pairs(t1) do
 		local v2 = t2[k]
 		if v2 == nil then
-			add(dt, {'add', k, v1})
-		elseif cmp then
-			local vdt = diff_vals(v1, v2)
-			if vdt then
-				add(dt, {'update', k, vdt})
+			attr(dt, 'add')[k] = v1
+		elseif diff_vals then
+			local vdt = diff_vals(self, v1, v2)
+			if vdt == true then
+				attr(dt, 'remove')[k] = true
+				attr(dt, 'add'   )[k] = v1
+			elseif vdt then
+				attr(dt, 'update')[k] = vdt
 			end
 		end
 	end
-	for k,v2 in sortedpairs(t2) do
-		local v1 = t1[k]
-		if v1 == nil then
-			add(dt, {'remove', k})
+	return next(dt) and dt or nil
+end
+
+local function diff_col_lists(self, c1, c2)
+	return cat(c1 or empty, '\0') ~= cat(c2 or empty, '\0')
+end
+
+local function not_eq(_, a, b) return a ~= b end
+local function diff_keys(self, t1, t2, keys)
+	local dt = {}
+	for k, diff in pairs(keys) do
+		if not isfunc(diff) then diff = not_eq end
+		if diff(self, t1[k], t2[k]) then
+			dt[k] = true
 		end
 	end
-	return #dt > 0 and dt or nil
+	return next(dt) and {old = t2, new = t1, changed = dt}
 end
 
-function schema:diff_tables(t1, t2, renames)
-	renames = renames or empty
-	local dt = {}
-	local function diff_fields(f1, f2)
-
-	end
-	local fdt = diff(t1.fields, t2.fields, diff_fields)
-	if fdt then
-		add(dt, {'fields', fdt})
-	end
-	if cat(t1.pk, '\0') ~= cat(t2.pk, '\0') then
-		add(dt, {'pk', t1.pk})
-	end
-	local ukt = diff(t1.uks, t2.uks); if ukt then add(dt, {'uks', ukt}) end
-	local fkt = diff(t1.fks, t2.fks); if fkt then add(dt, {'fks', fkt}) end
-	local ixt = diff(t1.ixs, t2.ixs); if ixt then add(dt, {'ixs', fkt}) end
-	return #dt > 0 and dt or nil
+local function diff_fields(self, f1, f2)
+	return diff_keys(self, f1, f2, {
+		digits=1,
+		decimals=1,
+		size=1,
+		charsize=1,
+		display_width=1,
+		unsigned=1,
+		not_null=1,
+		auto_increment=1,
+		default=1,
+		comment=1,
+		[self.engine..'_type']=1,
+		[self.engine..'_charset']=1,
+		[self.engine..'_collation']=1,
+		[self.engine..'_default']=1,
+	})
 end
 
-function schema:diff(sc2, opt)
+local function diff_ixs(self, ix1, ix2)
+	return diff_col_lists(self, ix1, ix2) or ix1.desc ~= ix2.desc
+end
+
+local function diff_fks(self, fk1, fk2)
+	return diff_keys(self, fk1, fk2, {
+		table=1,
+		ref_table=1,
+		onupdate=1,
+		ondelete=1,
+		cols=function(self, c1, c2) return diff_col_lists(self, c1, c2) end,
+		ref_cols=function(self, c1, c2) return diff_col_lists(self, c1, c2) end,
+	})
+end
+
+local function diff_checks(self, c1, c2)
+	return diff_keys(self, c1, c2, {[self.engine..'_body']=1})
+end
+
+local function diff_triggers(self, t1, t2)
+	return diff_keys(self, t1, t2, {
+		pos=1,
+		when=1,
+		op=1,
+		[self.engine..'_body']=1,
+	})
+end
+
+local function diff_procs(self, p1, p2)
+	return diff_keys(self, p1, p2, {
+		[self.engine..'_body']=1,
+		args=function(self, a1, a2)
+			return diff_maps(self, a1, a2, diff_fields, map_fields) and true
+		end,
+	})
+end
+
+local function diff_tables(self, t1, t2)
+	local d = {}
+	d.fields   = diff_maps(self, t1.fields  , t2.fields  , diff_fields, map_fields)
+	local pk   = diff_maps(self, {pk=t1.pk} , {pk=t2.pk} , diff_col_lists)
+	d.uks      = diff_maps(self, t1.uks     , t2.uks     , diff_col_lists)
+	d.ixs      = diff_maps(self, t1.ixs     , t2.ixs     , diff_ixs)
+	d.fks      = diff_maps(self, t1.fks     , t2.fks     , diff_fks)
+	d.checks   = diff_maps(self, t1.checks  , t2.checks  , diff_checks)
+	d.triggers = diff_maps(self, t1.triggers, t2.triggers, diff_triggers)
+	d.add_pk    = pk and pk.add and pk.add.pk
+	d.remove_pk = pk and pk.remove and pk.remove.pk
+	if not next(d) then return nil end
+	d.old = t2
+	d.new = t1
+	return d
+end
+
+local diff = {is_diff = true}
+
+function schema:diff(sc2, opt) --sync sc2 to sc1.
 	sc1 = self
 	sc2 = sc2 or schema.new()
-	local dt = {is_diff = true}
-	local function diff_table(t1, t2)
-		--return self:diff_tables(t1, t2, opt.table_renames)
+	sc1:check_refs()
+	sc2:check_refs()
+	local self = {engine = sc2.engine, __index = diff}
+	self.tables = diff_maps(self, sc1.tables, sc2.tables, diff_tables)
+	self.procs  = diff_maps(self, sc1.procs , sc2.procs , diff_procs)
+	return setmetatable(self, self)
+end
+
+function diff:pp()
+	if self.tables and self.tables.add then
+		for tbl_name, tbl in sortedpairs(self.tables) do
+			print('NEW TABLE', tbl_name)
+			print'--------------------------------------------'
+			pp(tbl)
+			for i,fld in ipairs(tbl.fields) do
+				print(_(' %-16s %s', fld.col, pp.format(fld)))
+			end
+			pp('UKS', tbl.uks)
+			pp('IXS', tbl.ixs)
+			pp('FKS', tbl.fks)
+			pp('CKS', tbl.checks)
+			pp('TGS', tbl.triggers)
+			print()
+		end
 	end
-	dt.tables = diff(sc1.tables, sc2.tables, diff_table)
-	local function diff_proc(p1, p2)
-		--
+	if self.tables and self.tables.update then
+		for tbl_name, d in sortedpairs(self.tables.update) do
+			print('TABLE CHANGED', tbl_name)
+			print'--------------------------------------------'
+			if d.fields and d.fields.update then
+				for col, d in pairs(d.fields.update) do
+					print(_('  %-16s', col))
+					for k in sortedpairs(d.changed) do
+						print(_('    %-16s %s->%s', k, d.old[k], d.new[k]))
+					end
+				end
+			end
+			print()
+		end
 	end
-	dt.procs = diff(sc1.procs, sc2.procs, diff_proc)
-	return dt
+	if self.tables and self.tables.remove then
+		for tbl_name in sortedpairs(self.tables.remove) do
+			print('TABLE REMOVED', tbl_name)
+		end
+	end
+	if self.procs and self.procs.add then
+
+	end
 end
 
 return schema

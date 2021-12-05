@@ -15,7 +15,7 @@ local getfenv = getfenv
 local pairs = pairs
 local print = print
 
-sc:def(function()
+sc:import(function()
 	import'schema_std'
 	--for k, v in pairs(getfenv()) do print(k) end
 	--types.int = {}
@@ -24,20 +24,18 @@ sc:def(function()
 	import(auth_schema)
 	import(lang_schema)
 	import(sp_schema)
+
+	tables.blah = {
+		id, pk,
+		name, name,
+	}
 end)
 
 webb.run(function()
 
-	if false then
-
-		local cn = spp.connect{fake = true}
-		--require'inspect'
-		local diff = sc:diff()
-		--pp(diff)
-
-		print(cat(cn:sqldiff(diff), ';\n\n'))
-
-	end
+	--local cn = spp.connect{fake = true}
+	--local diff = sc:diff()
+	--print(cat(cn:sqldiff(diff), ';\n\n'))
 
 	if true then
 
@@ -46,15 +44,32 @@ webb.run(function()
 			port = 3307,
 			user = 'root',
 			password = 'root',
-			schema = 'sp',
+			db = 'sp',
 			collation = 'server',
 		})
 
-		local sc = cn:extract_schema('sp')
+		local dbsc = cn:extract_schema('sp')
+		--pp(sc.tables.addr)
+		--pp(sc.procs)
 
-		local diff = sc:diff()
-		print(cat(cn:sqldiff(diff), ';\n\n'))
+		local diff = sc:diff(dbsc)
+		diff:pp()
+		--pp(diff)
+		--pp(diff.tables.update.addr.fields.update.note)
+		--pp(diff.tables.update.addr.fields.remove.note)
+		--local diff = sc:diff()
+		--print(cn:sqldiff(diff)[1])
+		--[[
+		for s,d in pairs(diff.tables.update) do
+			print(_('%-16s %s', s, d.fields and d.fields.update
+				and pp.format(map(d.fields.update, function(col, fld)
+				return cat(keys(fld.changed), ' ')
+				end))))
+		end
+		]]
+		--print(cat(cn:sqldiff(diff), ';\n'))
 
+		--pp(sc:table_create_order())
 
 	end
 
