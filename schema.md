@@ -33,13 +33,13 @@ different databases with different engines.
 ```lua
 function my_schema()
 
-	flags.not_null = {not_null = true, sql = 'not null'}
-	flags.unsigned = {unsigned = true, sql = 'unsigned'}
-	flags.autoinc  = {auto_increment = true, sql = 'auto increment'}
+	flags.not_null = {not_null = true}
+	flags.unsigned = {unsigned = true}
+	flags.autoinc  = {auto_increment = true}
 
-	types.int  = {sql = 'int'}
-	types.str  = {sql = 'varchar({maxlen}){#charset} character set {charset}{/charset}'}
-	types.text = {sql = "text chracter set 'utf8'"}
+	types.int  = {}
+	types.str  = {}
+	types.text = {}
 
 	types.id      = {int, unsigned}
 	types.auto_id = {id, not_null, pk, autoinc}
@@ -64,31 +64,40 @@ sc:def(my_schema)
 
 ### How this works / caveats
 
+
+
 #### TL;DR
 
-Always put schema definitions at the top of your script.
+Field names in `my_schema` that clash with flag names need to be quoted.
+Field names, type names and flag names that clash with globals from `sc.env`
+or locals from the outer scope also need to be quoted.
 
 #### Long version
 
 Using Lua for syntax instead of our own means that Lua's lexical rules apply,
-including lexical scoping which cannot be disabled, so there are some quirks
-to this that you have to know. Here's how this works:
+including lexical scoping which cannot be turned off, so there are some
+quirks to this that you have to know.
 
 When calling `sc:def(my_schema)`, the function `my_schema` is run in an
-environment that resolves every unknown keyword to itself, so `foo_id`
-simply turns into `'foo_id'`. This is so that you don't have to quote field
-names. The price to pay for this convenience is the need define `my_schema`
-in a clean lexical scope, ideally at the top of your script before you
-declare a bunch of locals in the outer scope, otherwise those locals will
-get captured and your names will resolve to them instead of to themselves.
-If you don't want to put your schema definition at the top of your script
+environment (available at `sc.env`) that resolves every unknown keyword
+to itself, so `foo_id` simply turns into `'foo_id'`. This is so that you
+don't have to quote the names of fields, types or flags, unless you have to.
+
+Because of this, you need to define `my_schema` in a clean lexical scope,
+ideally at the top of your script before you declare any locals, otherwise
+those locals will be captured by `my_schema` and your names will resolve to
+the locals instead of to themselves. Globals declared in `sc.env` are also
+captured so they can also clash with any unquoted names. Flag names can
+also clash but only with unquoted field names.
+
+If you don't want to put the schema definition at the top of the script
 for some reason, one simple way to fix an unwanted capture of an outer local
 is with an override: `local unsigned = 'unsigned'`.
 
-Another minor downside is that you cannot use globals inside `my_schema`
-directly, you'll have to _bring them into scope_ via locals. A DDL is mostly
-static however so you'd rarely need to do this, otherwise you can always
-extend `schema.env`.
+Also because of this, you cannot use globals inside `my_schema` directly,
+you'll have to _bring them into scope_ via locals, or access them through
+`_G`, which _is_ available. A DDL is mostly static however so you'd rarely
+need to do this.
 
 In the future, I might write a proper DSL based on [lx] that would avoid
 these issues completely, but the cost-benefit of that might be too low
