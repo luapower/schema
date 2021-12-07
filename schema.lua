@@ -381,7 +381,7 @@ local function map_fields(flds)
 end
 
 local function diff_maps(self, t1, t2, diff_vals, map, sc2, supported) --sync t2 to t1.
-	if supported == false then return nil end
+	if not supported then return nil end
 	t1 = t1 and (map and map(t1) or t1) or empty
 	t2 = t2 and (map and map(t2) or t2) or empty
 	local dt = {}
@@ -470,20 +470,20 @@ local function diff_procs(self, p1, p2, sc2)
 	return diff_keys(self, p1, p2, {
 		[self.engine..'_body']=1,
 		args=function(self, a1, a2)
-			return diff_maps(self, a1, a2, diff_fields, map_fields, sc2) and true
+			return diff_maps(self, a1, a2, diff_fields, map_fields, sc2, true) and true
 		end,
 	})
 end
 
 local function diff_tables(self, t1, t2, sc2)
 	local d = {}
-	d.fields   = diff_maps(self, t1.fields  , t2.fields  , diff_fields   , map_fields, sc2)
-	local pk   = diff_maps(self, {pk=t1.pk} , {pk=t2.pk} , diff_ix_cols  , nil, sc2)
-	d.uks      = diff_maps(self, t1.uks     , t2.uks     , diff_ix_cols  , nil, sc2)
-	d.ixs      = diff_maps(self, t1.ixs     , t2.ixs     , diff_ixs      , nil, sc2)
-	d.fks      = diff_maps(self, t1.fks     , t2.fks     , diff_fks      , nil, sc2, sc2.supports_fks      or false)
-	d.checks   = diff_maps(self, t1.checks  , t2.checks  , diff_checks   , nil, sc2, sc2.supports_checks   or false)
-	d.triggers = diff_maps(self, t1.triggers, t2.triggers, diff_triggers , nil, sc2, sc2.supports_triggers or false)
+	d.fields   = diff_maps(self, t1.fields  , t2.fields  , diff_fields   , map_fields, sc2, true)
+	local pk   = diff_maps(self, {pk=t1.pk} , {pk=t2.pk} , diff_ix_cols  , nil, sc2, true)
+	d.uks      = diff_maps(self, t1.uks     , t2.uks     , diff_ix_cols  , nil, sc2, true)
+	d.ixs      = diff_maps(self, t1.ixs     , t2.ixs     , diff_ixs      , nil, sc2, true)
+	d.fks      = diff_maps(self, t1.fks     , t2.fks     , diff_fks      , nil, sc2, sc2.supports_fks     )
+	d.checks   = diff_maps(self, t1.checks  , t2.checks  , diff_checks   , nil, sc2, sc2.supports_checks  )
+	d.triggers = diff_maps(self, t1.triggers, t2.triggers, diff_triggers , nil, sc2, sc2.supports_triggers)
 	d.add_pk    = pk and pk.add and pk.add.pk
 	d.remove_pk = pk and pk.remove and pk.remove.pk
 	if not next(d) then return nil end
@@ -494,20 +494,22 @@ end
 
 local diff = {is_diff = true}
 
-function schema:diff_from_old(sc2) --sync sc2 to self.
+function schema:diff_from_old(sc2, opt) --sync sc2 to self.
 	local sc1 = self
 	local sc2 = assertf(isschema(sc2) and sc2, 'schema expected, got `%s`', type(sc2))
 	sc1:check_refs()
 	sc2:check_refs()
 	local self = {engine = sc2.engine, __index = diff}
-	self.tables = diff_maps(self, sc1.tables, sc2.tables, diff_tables, nil, sc2)
-	self.procs  = diff_maps(self, sc1.procs , sc2.procs , diff_procs , nil, sc2, sc2.supports_procs or false)
+	self.tables = diff_maps(self, sc1.tables, sc2.tables, diff_tables, nil, sc2, true)
+	self.procs  = diff_maps(self, sc1.procs , sc2.procs , diff_procs , nil, sc2, sc2.supports_procs)
 	return setmetatable(self, self)
 end
 
-function schema:diff_to_new(sc2) --sync self to sc2.
-	return sc2:diff_from_old(self)
+function schema:diff_to_new(sc2, opt) --sync self to sc2.
+	return sc2:diff_from_old(self, opt)
 end
+
+--diff pretty-printing -------------------------------------------------------
 
 local function dots(s, n) return #s > n and s:sub(1, n-2)..'..' or s end
 local tobytes = function(x) return x and glue.tobytes(x) or '' end
