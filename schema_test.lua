@@ -102,14 +102,10 @@ webb.run(function()
 		local st2 = update({}, st1)
 		local sc1 = schema.new(st1):import(sc1)
 		local sc2 = schema.new(st2):import(sc2)
-		local d = sc1:diff_to_new(sc2)
+		local d = schema.diff(sc1, sc2)
 		pp(d)
 		d:pp()
 	end
-
-	--local cn = spp.connect{fake = true}
-	--local diff = sc:diff()
-	--print(cat(cn:sqldiff(diff), ';\n\n'))
 
 	if false then
 
@@ -126,7 +122,7 @@ webb.run(function()
 		--pp(sc.tables.addr)
 		--pp(sc.procs)
 
-		local diff = sc:diff_from_old(cn:empty_schema())
+		local diff = schema.diff(cn:empty_schema(), sc)
 		diff:pp{
 			--hide_attrs = {mysql_collation=1, mysql_default=1},
 		}

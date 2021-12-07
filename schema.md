@@ -20,10 +20,14 @@ Here's some reasons:
 from a common structured format.
 * you want to diff between a live database and your "on paper" schema
 to find out if the database was migrated properly.
-* you want to generate schema migrations (semi-)automatically.
+* you want to generate schema migrations (semi-)automatically without having
+to create and maintain schema versions and migration scripts.
 * you want to annotate table fields with extra information for use in
 data-bound widget toolkits like [x-widgets], and you don't want to do that
 off-band in a separate file.
+* your app has modules or extensions and you want each module to define its
+own part of the app schema, including adding columns to common tables
+or even adding foreign keys that reference tables from other modules.
 * you want to use a boolean type in MySQL.
 * you want a "shell" API for bulk DML ops like copying tables between
 databases with different engines.
@@ -116,8 +120,7 @@ which is more acceptable.
 
 --------------------------------- -------------------------------------------
 `schema.new(opt) -> sc`           create a new schema object
-`sc:diff_from_old(old_sc)`        find out what changed from `old_sc` to `sc`
-`sc:diff_to_new(new_sc)`          find out what changed from `sc` to `new_sc`
+`schema.diff(older_sc, newer_sc)` find out what changed between `older_sc` and `newer_sc`
 --------------------------------- -------------------------------------------
 
 ## Background & rationale

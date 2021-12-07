@@ -210,91 +210,85 @@ do
 	end
 end
 
-do
-	local function import(self, k, sc)
-		local k1 = k:gsub('s$', '')
-		for k,v in pairs(sc[k]) do
-			assertf(not self[k], 'duplicate %s `%s`', k1, k)
-			self[k] = v
-		end
+local function import(self, k, sc)
+	local k1 = k:gsub('s$', '')
+	for k,v in pairs(sc[k]) do
+		assertf(not self[k], 'duplicate %s `%s`', k1, k)
+		self[k] = v
 	end
-	function schema:import(src)
-		if isstr(src) then --module
-			src = schema.package[src] or require(src)
-		end
-		if isfunc(src) then --def
-			if not self.loaded[src] then
-				setfenv(src, self.env)
-				src()
-				self.loaded[src] = true
-			end
-		elseif isschema(src) then --schema
-			if not self.loaded[src] then
-				import(self, 'types' , sc)
-				import(self, 'tables', sc)
-				import(self, 'procs' , sc)
-				self.loaded[src] = true
-			end
-		elseif istab(src) then --plain table: use as environsment.
-			update(self.env, src)
-		else
-			assert(false)
-		end
-		return self
+end
+function schema:import(src)
+	if isstr(src) then --module
+		src = schema.package[src] or require(src)
 	end
+	if isfunc(src) then --def
+		if not self.loaded[src] then
+			setfenv(src, self.env)
+			src()
+			self.loaded[src] = true
+		end
+	elseif isschema(src) then --schema
+		if not self.loaded[src] then
+			import(self, 'types' , sc)
+			import(self, 'tables', sc)
+			import(self, 'procs' , sc)
+			self.loaded[src] = true
+		end
+	elseif istab(src) then --plain table: use as environsment.
+		update(self.env, src)
+	else
+		assert(false)
+	end
+	return self
 end
 
 schema.env = {_G = _G}
 
-do
-	local function fk_func(force_ondelete, force_onupdate)
-		return function(arg1, ...)
-			if isschema(arg1) then --used as flag: make a fk on current field.
-				local self, tbl, fld = arg1, ...
-				add_fk(self, tbl, {fld.col}, nil,
-					force_ondelete,
-					force_onupdate,
+local function fk_func(force_ondelete, force_onupdate)
+	return function(arg1, ...)
+		if isschema(arg1) then --used as flag: make a fk on current field.
+			local self, tbl, fld = arg1, ...
+			add_fk(self, tbl, {fld.col}, nil,
+				force_ondelete,
+				force_onupdate,
+				fld)
+		else --called by user, return a flag generator.
+			local ref_tbl, ondelete, onupdate = arg1, ...
+			return function(self, tbl, fld)
+				add_fk(self, tbl, {fld.col}, ref_tbl,
+					force_ondelete or ondelete,
+					force_onupdate or onupdate,
 					fld)
-			else --called by user, return a flag generator.
-				local ref_tbl, ondelete, onupdate = arg1, ...
-				return function(self, tbl, fld)
-					add_fk(self, tbl, {fld.col}, ref_tbl,
-						force_ondelete or ondelete,
-						force_onupdate or onupdate,
-						fld)
-				end
 			end
 		end
 	end
-	schema.env.fk       = fk_func()
-	schema.env.child_fk = fk_func'cascade'
-	schema.env.weak_fk  = fk_func'set null'
 end
+schema.env.fk       = fk_func()
+schema.env.child_fk = fk_func'cascade'
+schema.env.weak_fk  = fk_func'set null'
 
 function schema:add_fk(tbl, cols, ...)
 	local tbl = assertf(self.tables[tbl], 'unknown table `%s`', tbl)
 	add_fk(self, tbl, names(cols), ...)
 end
 
-do
-	local function ix_func(T)
-		return function(arg1, ...)
-			if isschema(arg1) then --used as flag: make an index on current field.
-				local self, tbl, fld = arg1, ...
-				add_ix(T, tbl, {fld.col})
-				fld[T] = true
-			else --called by user, return a flag generator.
-				local cols = pack(arg1, ...)
-				return function(self, tbl, fld)
-					local cols = parse_ix_cols(fld, unpack(cols))
-					add_ix(T, tbl, cols)
-				end
+local function ix_func(T)
+	return function(arg1, ...)
+		if isschema(arg1) then --used as flag: make an index on current field.
+			local self, tbl, fld = arg1, ...
+			add_ix(T, tbl, {fld.col})
+			fld[T] = true
+		else --called by user, return a flag generator.
+			local cols = pack(arg1, ...)
+			return function(self, tbl, fld)
+				local cols = parse_ix_cols(fld, unpack(cols))
+				add_ix(T, tbl, cols)
 			end
 		end
 	end
-	schema.env.uk = ix_func'uk'
-	schema.env.ix = ix_func'ix'
 end
+schema.env.uk = ix_func'uk'
+schema.env.ix = ix_func'ix'
 
 schema.flags = {}
 schema.types = {}
@@ -494,8 +488,7 @@ end
 
 local diff = {is_diff = true}
 
-function schema:diff_from_old(sc2, opt) --sync sc2 to self.
-	local sc1 = self
+function schema.diff(sc2, sc1, opt) --sync sc2 to sc1.
 	local sc2 = assertf(isschema(sc2) and sc2, 'schema expected, got `%s`', type(sc2))
 	sc1:check_refs()
 	sc2:check_refs()
@@ -503,10 +496,6 @@ function schema:diff_from_old(sc2, opt) --sync sc2 to self.
 	self.tables = diff_maps(self, sc1.tables, sc2.tables, diff_tables, nil, sc2, true)
 	self.procs  = diff_maps(self, sc1.procs , sc2.procs , diff_procs , nil, sc2, sc2.supports_procs)
 	return setmetatable(self, self)
-end
-
-function schema:diff_to_new(sc2, opt) --sync self to sc2.
-	return sc2:diff_from_old(self, opt)
 end
 
 --diff pretty-printing -------------------------------------------------------
