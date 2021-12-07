@@ -17,20 +17,20 @@ do
 	function M.enum(...) --mysql-specific `enum` type
 		local vals = names(cat({...}, ' '))
 		return {is_type = true, type = 'enum', mysql_type = 'enum', enum_values = vals,
-			charset = 'ascii', collation = 'ascii_bin' , mysql_collation = 'ascii_bin'}
+			charset = 'ascii', collation = 'ascii_general_ci' , mysql_collation = 'ascii_general_ci'}
 	end
 
 	function M.set(...) --mysql-specific `set` type
 		local vals = names(cat({...}, ' '))
 		return {is_type = true, type = 'set', mysql_type = 'set', set_values = vals,
-			charset = 'ascii', collation = 'ascii_bin' , mysql_collation = 'ascii_bin'}
+			charset = 'ascii', collation = 'ascii_general_ci' , mysql_collation = 'ascii_general_ci'}
 	end
 
-	function M.mysql(s)
+	function M.mysql(s) --mysql code for triggers and stored procs.
 		return {mysql_body = _('begin\n%s\nend', outdent(outdent(s):trim(), '\t'))}
 	end
 
-	function M.bool_to_lua(v)
+	function M.bool_to_lua(v) --`to_lua` for the `bool` type stored as `tinyint`.
 		if v == nil then return nil end
 		return v ~= 0
 	end
@@ -72,10 +72,11 @@ return function()
 	types.double    = {type = 'number' , size = 8, mysql_type = 'double'}
 	types.float     = {type = 'number' , size = 4, mysql_type = 'float'}
 	types.dec       = {type = 'decimal', mysql_type = 'decimal'}
-	types.str       = {type = 'text', mysql_type = 'varchar'}
+	types.str       = {type = 'text'  , mysql_type = 'varchar'}
+	types.bin       = {type = 'binary', mysql_type = 'varbinary'}
 	types.text      = {str, mysql_type = 'text', size = 0xffff, maxlen = 0xffff, utf8_bin}
 	types.chr       = {str, mysql_type = 'char', padded = true}
-	types.blob      = {mysql_type = 'mediumblob', size = 0xffffff}
+	types.blob      = {type = 'binary', mysql_type = 'mediumblob', size = 0xffffff}
 	types.time      = {type = 'time', mysql_type = 'bigint'}
 	types.timeofday = {type = 'timeofday', mysql_type = 'time'}
 	types.date      = {type = 'date', mysql_type = 'date', to_sql = date_to_sql}
@@ -88,7 +89,7 @@ return function()
 	types.bigidpk   = {bigid, pk, autoinc}
 
 	types.name      = {str, size = 256, maxlen = 64, utf8_ai_ci}
-	types.strid     = {str, size =  64, maxlen = 64, ascii_bin}
+	types.strid     = {str, size =  64, maxlen = 64, ascii_ci}
 	types.strpk     = {strid, pk}
 	types.email     = {str, size =  512, maxlen =  128, utf8_ci}
 	types.hash      = {str, size =   64, maxlen =   64, ascii_bin} --enough for tohex(hmac.sha256())

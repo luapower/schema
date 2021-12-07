@@ -78,26 +78,22 @@ end)
 webb.run(function()
 
 	if true then
-		local rt = {
-			digits=1,
-			decimals=1,
-			size=1, --not relevant for numbers, mysql_type is enough.
-			maxlen=1,
-			unsigned=1,
-			not_null=1,
-			auto_increment=1,
-			comment=1,
-			mysql_type=1,
-			mysql_charset=1,
-			mysql_collation=1,
-			mysql_default=1,
-		}
-		local function rf()
-			return rt
-		end
 		local st1 = {
 			engine = 'mysql',
-			relevant_field_attrs = rf,
+			relevant_field_attrs = {
+				digits=1,
+				decimals=1,
+				size=1, --not relevant for numbers, mysql_type is enough.
+				maxlen=1,
+				unsigned=1,
+				not_null=1,
+				auto_increment=1,
+				comment=1,
+				mysql_type=1,
+				mysql_charset=1,
+				mysql_collation=1,
+				mysql_default=1,
+			},
 			supports_fks = true,
 			supports_checks = true,
 			supports_triggers = true,
@@ -106,7 +102,7 @@ webb.run(function()
 		local st2 = update({}, st1)
 		local sc1 = schema.new(st1):import(sc1)
 		local sc2 = schema.new(st2):import(sc2)
-		local d = sc2:diff(sc1)
+		local d = sc1:diff_to_new(sc2)
 		pp(d)
 		d:pp()
 	end
@@ -123,33 +119,17 @@ webb.run(function()
 			user = 'root',
 			password = 'root',
 			db = 'sp',
-			collation = 'server',
+			charset = 'utf8mb4',
 		})
 
 		local dbsc = cn:extract_schema('sp')
 		--pp(sc.tables.addr)
 		--pp(sc.procs)
 
-		local diff = sc:diff(nil, {engine = 'mysql'})
+		local diff = sc:diff_from_old(cn:empty_schema())
 		diff:pp{
 			--hide_attrs = {mysql_collation=1, mysql_default=1},
 		}
-		--pp(diff)
-		--pp(diff.tables.update.addr.fields.update.note)
-		--pp(diff.tables.update.addr.fields.remove.note)
-		--local diff = sc:diff()
-		--print(cn:sqldiff(diff)[1])
-		--[[
-		for s,d in pairs(diff.tables.update) do
-			print(_('%-16s %s', s, d.fields and d.fields.update
-				and pp.format(map(d.fields.update, function(col, fld)
-				return cat(keys(fld.changed), ' ')
-				end))))
-		end
-		]]
-		--print(cat(cn:sqldiff(diff), ';\n'))
-
-		--pp(sc:table_create_order())
 
 	end
 

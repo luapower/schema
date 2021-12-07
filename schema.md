@@ -18,14 +18,15 @@ Here's some reasons:
 
 * you want to generate SQL DDL scripts for different SQL dialects
 from a common structured format.
-* you want to diff between a live database and a master schema to find out
-if the database is migrated properly.
+* you want to diff between a live database and your "on paper" schema
+to find out if the database was migrated properly.
 * you want to generate schema migrations (semi-)automatically.
 * you want to annotate table fields with extra information for use in
 data-bound widget toolkits like [x-widgets], and you don't want to do that
 off-band in a separate file.
+* you want to use a boolean type in MySQL.
 * you want a "shell" API for bulk DML ops like copying tables between
-different databases with different engines.
+databases with different engines.
 * use it as a base for a scriptable ETL tool.
 
 ## Example
@@ -115,9 +116,11 @@ which is more acceptable.
 
 --------------------------------- -------------------------------------------
 `schema.new(opt) -> sc`           create a new schema object
+`sc:diff_from_old(old_sc)`        find out what changed from `old_sc` to `sc`
+`sc:diff_to_new(new_sc)`          find out what changed from `sc` to `new_sc`
 --------------------------------- -------------------------------------------
 
-## Rationale
+## Background & rationale
 
 This library came about when I needed to migrate an ecommerce database
 from MySQL to Tarantool, and I figured I would kill multiple birds with
@@ -133,7 +136,7 @@ Keeping that metadata separate would burden me to keep it in sync with the
 schema after schema refactorings (renaming columns, etc).
 
 * the desire to check if the schema on the databases in production
-is up-to-date with the oon-paper schema, and generating schema migration
+is up-to-date with the on-paper schema, and generating schema migration
 commands (semi-)automatically. The "semi" part is because I'm not sure
 there's an algorithm to reliably tell the difference between a column
 rename and a column delete & add and other things like that.

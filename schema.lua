@@ -12,9 +12,9 @@ require'$'
 --NOTE: flag names clash with unquoted field names!
 --NOTE: env names clash with all unquoted names!
 
-local schema = {is_schema = true, package = {}}
-
 local function isschema(t) return istab(t) and t.is_schema end
+
+local schema = {is_schema = true, package = {}, isschema = isschema}
 
 local function resolve_type(self, fld, t, i, n, fld_ct, allow_types, allow_flags)
 	for i = i, n do
@@ -273,7 +273,7 @@ end
 
 function schema:add_fk(tbl, cols, ...)
 	local tbl = assertf(self.tables[tbl], 'unknown table `%s`', tbl)
-	add_fk(self, tbl, names(cols), ...) --TODO: desc
+	add_fk(self, tbl, names(cols), ...)
 end
 
 do
@@ -365,61 +365,6 @@ end
 
 schema.env.null = function() end
 
---dependency order -----------------------------------------------------------
-
-local function dependency_order(items, item_deps)
-	local function dep_maps()
-		local t = {} --{item->{dep_item->true}}
-		local function add_item(item)
-			if t[item] then return true end --already added
-			local deps = item_deps(item)
-			local dt = {}
-			t[item] = dt
-			for dep_item in pairs(deps) do
-				if add_item(dep_item) then
-					dt[dep_item] = true
-				end
-			end
-			return true --added
-		end
-		for item in pairs(items) do
-			add_item(item)
-		end
-		return t
-	end
-	--add items with zero deps first, remove them from the dep maps
-	--of all other items and from the original table of items,
-	--and repeat, until there are no more items.
-	local t = dep_maps()
-	local circular_deps
-	local dt = {}
-	while next(t) do
-		local guard = true
-		for item, deps in sortedpairs(t) do --stabilize the list
-			if not next(deps) then
-				guard = false
-				add(dt, item) --build it
-				t[item] = nil --remove it from the final table
-				--remove it from all dep lists
-				for _, deps in pairs(t) do
-					deps[item] = nil
-				end
-			end
-		end
-		if guard then
-			circular_deps = t --circular dependencies found
-			break
-		end
-	end
-	return dt, circular_deps
-end
-
-function schema:table_create_order()
-	return dependency_order(self.tables, function(tbl)
-		return self.tables[tbl].deps or empty
-	end)
-end
-
 function schema:check_refs()
 	if not self.table_refs or not next(self.table_refs) then return end
 	assertf(false, 'unresolved refs to tables: %s', cat(keys(self.table_refs, true), ', '))
@@ -489,7 +434,7 @@ local function diff_keys(self, t1, t2, keys)
 end
 
 local function diff_fields(self, f1, f2, sc2)
-	return diff_keys(self, f1, f2, sc2.relevant_field_attrs(f1, f2))
+	return diff_keys(self, f1, f2, sc2.relevant_field_attrs)
 end
 
 local function diff_ixs(self, ix1, ix2)
@@ -549,15 +494,19 @@ end
 
 local diff = {is_diff = true}
 
-function schema:diff(sc2, opt) --sync sc2 to sc1.
-	sc1 = self
-	sc2 = assertf(isschema(sc2) and sc2, 'schema expected, got `%s`', type(sc2))
+function schema:diff_from_old(sc2) --sync sc2 to self.
+	local sc1 = self
+	local sc2 = assertf(isschema(sc2) and sc2, 'schema expected, got `%s`', type(sc2))
 	sc1:check_refs()
 	sc2:check_refs()
 	local self = {engine = sc2.engine, __index = diff}
 	self.tables = diff_maps(self, sc1.tables, sc2.tables, diff_tables, nil, sc2)
 	self.procs  = diff_maps(self, sc1.procs , sc2.procs , diff_procs , nil, sc2, sc2.supports_procs or false)
 	return setmetatable(self, self)
+end
+
+function schema:diff_to_new(sc2) --sync self to sc2.
+	return sc2:diff_from_old(self)
 end
 
 local function dots(s, n) return #s > n and s:sub(1, n-2)..'..' or s end
@@ -688,12 +637,12 @@ function diff:pp(opt)
 			end
 			if d.ixs and d.ixs.remove then
 				for ix_name, ix in sortedpairs(d.ixs.remove) do
-					P('   -IX   %s', ix_cols(ix)) --TODO: desc
+					P('   -IX   %s', ix_cols(ix))
 				end
 			end
 			if d.ixs and d.ixs.add then
 				for ix_name, ix in sortedpairs(d.ixs.add) do
-					P('   +IX   %s', ix_cols(ix)) --TODO: desc
+					P('   +IX   %s', ix_cols(ix))
 				end
 			end
 			if d.checks and d.checks.remove then
