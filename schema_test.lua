@@ -9,7 +9,7 @@ local function sc1()
 
 	tables.t1 = {
 		f1, idpk, ix, fk(t0),
-		f2, name, uk, check 'a < b',
+		f2, name, uk'f2 desc', check 'a < b',
 	}
 
 	trigger(foo, after, insert, t1, mysql [[
@@ -29,14 +29,15 @@ local function sc2()
 	}
 
 	tables.t2 = {
-		f1, idpk, uk, ix, check 'a > b',
+		f0, name,
+		f1, id, pk'f1 desc', uk'f0,f1 desc', ix'f0 desc,f1 desc', check 'a > b',
 	}
 
 	trigger(foo, after, insert, t2, mysql [[
 		dude wasup again;
 	]])
 
-	proc(foobar, {int, out, uint8}, mysql [[
+	proc(foobar, {arg1, int, out, arg2, uint8}, mysql [[
 		foobar;
 	]])
 

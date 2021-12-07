@@ -42,12 +42,6 @@ do
 		return v
 	end
 
-	function M.lower_type(self, typ)
-		if typ.default ~= nil and typ.mysql_default == nil then
-			typ.mysql_default = typ.default
-		end
-	end
-
 	--function M.default(self,
 
 end

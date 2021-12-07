@@ -64,8 +64,6 @@ sc:def(my_schema)
 
 ### How this works / caveats
 
-
-
 #### TL;DR
 
 Field names in `my_schema` that clash with flag names need to be quoted.
@@ -103,6 +101,14 @@ In the future, I might write a proper DSL based on [lx] that would avoid
 these issues completely, but the cost-benefit of that might be too low
 compared to this relatively simple and hackable implementation.
 
+Q: Flags and types look like the do the same thing, why the distinction?
+
+A: Because column definitions have the form `name, type, flag1, ...`
+instead of `name, flag1|type1, ...` which would have allowed a field to
+inherit from multiple types but would've also made type names clash with
+field names. With the first variant only flag names clash with field names
+which is more acceptable.
+
 ## API
 
 <warn>WIP</warn>
@@ -114,7 +120,7 @@ compared to this relatively simple and hackable implementation.
 ## Rationale
 
 This library came about when I needed to migrate an ecommerce database
-from MySQL to Tarantool, and I figured I would kill two birds with
+from MySQL to Tarantool, and I figured I would kill multiple birds with
 one stone, namely:
 
 * the need to migrate both schema and data automatically between engines.
@@ -126,11 +132,12 @@ that can copy data between engines.
 Keeping that metadata separate would burden me to keep it in sync with the
 schema after schema refactorings (renaming columns, etc).
 
-* the desire to check if the schema on a bunch of databases in a cluster
-is up-to-date with the master schema, and generating schema migration
+* the desire to check if the schema on the databases in production
+is up-to-date with the oon-paper schema, and generating schema migration
 commands (semi-)automatically. The "semi" part is because I'm not sure
 there's an algorithm to reliably tell the difference between a column
 rename and a column delete & add and other things like that.
 
-* minor things, like applying the `create table` statements in the right
-order including when circular dependencies from foreign keys are present.
+* minor things like not having to worry about dependency order when defining
+the schema (eg. defining foreign keys pointing to tables that are not yet defined).
+

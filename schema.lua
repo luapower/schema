@@ -41,11 +41,11 @@ local function resolve_type(self, fld, t, i, n, fld_ct, allow_types, allow_flags
 	return n + 1
 end
 
-local function add_cols(self, t, dt, loc1, fld_ct)
+local function parse_cols(self, t, dt, loc1, fld_ct)
 	local i = 1
-	while i <= #t do --field_name, field_type|field_attrs, ...
+	while i <= #t do --[out], field_name, type_name, flag_name|{attr->val}, ...
 		local col, mode
-		if not fld_ct.is_table then --proc param
+		if not fld_ct.is_table then --this is a proc param, not a table field.
 			mode = t[i]
 			if mode == 'out' then
 				i = i + 1
@@ -80,10 +80,7 @@ end
 
 local function parse_table(self, name, t)
 	local tbl = {is_table = true, name = name, fields = {}}
-	add_cols(self, t, tbl.fields, name, tbl)
-	function tbl.add_cols(t)
-		add_cols(self, t, tbl.fields, name, tbl)
-	end
+	parse_cols(self, t, tbl.fields, name, tbl)
 	--resolve fks that ref this table.
 	local fks = self.table_refs and self.table_refs[name]
 	if fks then
@@ -93,25 +90,54 @@ local function parse_table(self, name, t)
 		end
 		self.table_refs[name] = nil
 	end
+	--add API to table to add more cols after-definition.
+	function tbl.add_cols(t)
+		parse_cols(self, t, tbl.fields, name, tbl)
+	end
 	return tbl
 end
 
-local function add_global(t, k, v)
-	assertf(not t.flags [k], 'global overshadows flag `%s`', k)
-	assertf(not t.types [k], 'global overshadows type `%s`', k)
-	assertf(not t.tables[k], 'global overshadows table `%s`', k)
-	assertf(not t.procs [k], 'global overshadows proc `%s`', k)
-	rawset(t, k, v)
+local function parse_ix_cols(fld, ...) --'col1 [desc], ...'
+	if not ... then
+		return {fld.col}
+	end
+	local s = cat({...}, ',')
+	local dt = {desc = {}}
+	for s in s:gmatch'[^,]+' do
+		s = s:trim()
+		local name, desc = s:match'(.-)%s+desc$'
+		if name then
+			desc = true
+		else
+			name, desc = s, false
+		end
+		add(dt, name)
+		add(dt.desc, desc and true or false)
+	end
+	return dt
 end
 
-local function cols(s, newsep)
-	return s:gsub('%s+', newsep or ',')
+local function check_cols(T, tbl, cols)
+	for i,col in ipairs(cols) do
+		local found = false
+		for i,fld in ipairs(tbl.fields) do
+			if fld.col == col then found = true; break end
+		end
+		assertf(found, 'unknown column in %s of `%s`: `%s`', T, tbl.name, col)
+	end
+	return cols
 end
-local function dename(s)
-	return s:gsub('`', '')
+
+local function add_pk(tbl, cols)
+	assertf(not tbl.pk, 'pk already applied for table `%s`', tbl.name)
+	tbl.pk = check_cols('pk', tbl, cols)
 end
-local function indexname(type, tbl, col, suffix)
-	return fmt('%s_%s__%s%s', type, dename(tbl), dename(cols(col, '_')))
+
+local function add_ix(T, tbl, cols)
+	local t = attr(tbl, T..'s')
+	local k = _('%s_%s__%s', T, tbl.name, cat(cols, '_'))
+	assertf(not t[k], 'duplicate %s `%s`', T, k)
+	t[k] = check_cols(T, tbl, cols)
 end
 
 local function add_fk(self, tbl, cols, ref_tbl, ondelete, onupdate, fld)
@@ -119,7 +145,7 @@ local function add_fk(self, tbl, cols, ref_tbl, ondelete, onupdate, fld)
 	local k = _('fk_%s__%s', tbl.name, cat(cols, '_'))
 	assertf(not fks[k], 'duplicate fk `%s`', k)
 	ref_tbl = ref_tbl or assert(#cols == 1 and cols[1])
-	local fk = {table = tbl.name, cols = cols,
+	local fk = {table = tbl.name, cols = check_cols('fk', tbl, cols),
 		ref_table = ref_tbl, ondelete = ondelete, onupdate = onupdate}
 	fks[k] = fk
 	attr(tbl, 'deps')[ref_tbl] = true
@@ -136,14 +162,14 @@ local function add_fk(self, tbl, cols, ref_tbl, ondelete, onupdate, fld)
 	end
 end
 
-local function add_ix(T, tbl, cols)
-	local t = attr(tbl, T..'s')
-	local k = _('%s_%s__%s', T, tbl.name, cat(cols, '_'))
-	assertf(not t[k], 'duplicate %s `%s`', T, k)
-	t[k] = cols
-end
-
 do
+	local function add_global(t, k, v)
+		assertf(not t.flags [k], 'global overshadows flag `%s`', k)
+		assertf(not t.types [k], 'global overshadows type `%s`', k)
+		assertf(not t.tables[k], 'global overshadows table `%s`', k)
+		assertf(not t.procs [k], 'global overshadows proc `%s`', k)
+		rawset(t, k, v)
+	end
 	local T = function() end
 	local function getter(t, k) return t[T][k] end
 	local function init(self, env, k, parse)
@@ -223,7 +249,7 @@ schema.env = {_G = _G}
 do
 	local function fk_func(force_ondelete, force_onupdate)
 		return function(arg1, ...)
-			if isschema(arg1) then --used as flag.
+			if isschema(arg1) then --used as flag: make a fk on current field.
 				local self, tbl, fld = arg1, ...
 				add_fk(self, tbl, {fld.col}, nil,
 					force_ondelete,
@@ -247,20 +273,20 @@ end
 
 function schema:add_fk(tbl, cols, ...)
 	local tbl = assertf(self.tables[tbl], 'unknown table `%s`', tbl)
-	add_fk(self, tbl, names(cols), ...)
+	add_fk(self, tbl, names(cols), ...) --TODO: desc
 end
 
 do
 	local function ix_func(T)
 		return function(arg1, ...)
-			if isschema(arg1) then --used as flag.
-				local sch, tbl, fld = arg1, ...
+			if isschema(arg1) then --used as flag: make an index on current field.
+				local self, tbl, fld = arg1, ...
 				add_ix(T, tbl, {fld.col})
 				fld[T] = true
 			else --called by user, return a flag generator.
-				local cols = names(cat({arg1, ...}, ' '))
-				return function(sch, tbl, fld)
-					if #cols == 0 then cols = {fld.col} end
+				local cols = pack(arg1, ...)
+				return function(self, tbl, fld)
+					local cols = parse_ix_cols(fld, unpack(cols))
 					add_ix(T, tbl, cols)
 				end
 			end
@@ -273,12 +299,21 @@ end
 schema.flags = {}
 schema.types = {}
 
-function schema.flags.pk(self, tbl, fld)
-	assertf(not tbl.pk, 'pk already applied for table `%s`', tbl.name)
-	tbl.pk = imap(tbl.fields, 'col')
-	--apply `not_null` flag to all fields up to this.
-	for _,fld in ipairs(tbl.fields) do
-		fld.not_null = true
+function schema.env.pk(arg1, ...)
+	if isschema(arg1) then --used as flag.
+		local self, tbl, cur_fld = arg1, ...
+		add_pk(tbl, imap(tbl.fields, 'col'))
+		--apply `not_null` flag to all fields up to this.
+		for _,fld in ipairs(tbl.fields) do
+			fld.not_null = true
+			if fld == cur_fld then break end
+		end
+	else --called by user, return a flag generator.
+		local cols = pack(arg1, ...)
+		return function(self, tbl, fld)
+			local cols = parse_ix_cols(fld, unpack(cols))
+			add_pk(tbl, cols)
+		end
 	end
 end
 
@@ -319,7 +354,7 @@ end
 
 function schema:add_proc(name, args, ...)
 	local p = {name = name, args = {}}
-	add_cols(self, args, p.args, name, p)
+	parse_cols(self, args, p.args, name, p)
 	update(p, ...)
 	self.procs[name] = p
 end
@@ -428,8 +463,17 @@ local function diff_maps(self, t1, t2, diff_vals, map, sc2, supported) --sync t2
 	return next(dt) and dt or nil
 end
 
-local function diff_col_lists(self, c1, c2)
-	return cat(c1 or empty, '\0') ~= cat(c2 or empty, '\0')
+local function diff_arrays(a1, a2)
+	a1 = a1 or empty
+	a2 = a2 or empty
+	if #a1 ~= #a2 then return end
+	for i,s in ipairs(a1) do
+		if a2[i] ~= s then return end
+	end
+	return true
+end
+local function diff_ix_cols(self, c1, c2)
+	return diff_arrays(c1, c2) or diff_arrays(c1.desc, c2.desc)
 end
 
 local function not_eq(_, a, b) return a ~= b end
@@ -449,7 +493,7 @@ local function diff_fields(self, f1, f2, sc2)
 end
 
 local function diff_ixs(self, ix1, ix2)
-	return diff_col_lists(self, ix1, ix2) or ix1.desc ~= ix2.desc
+	return diff_ix_cols(self, ix1, ix2) or ix1.desc ~= ix2.desc
 end
 
 local function diff_fks(self, fk1, fk2)
@@ -458,8 +502,8 @@ local function diff_fks(self, fk1, fk2)
 		ref_table=1,
 		onupdate=1,
 		ondelete=1,
-		cols=function(self, c1, c2) return diff_col_lists(self, c1, c2) end,
-		ref_cols=function(self, c1, c2) return diff_col_lists(self, c1, c2) end,
+		cols=function(self, c1, c2) return diff_ix_cols(self, c1, c2) end,
+		ref_cols=function(self, c1, c2) return diff_ix_cols(self, c1, c2) end,
 	})
 end
 
@@ -489,8 +533,8 @@ end
 local function diff_tables(self, t1, t2, sc2)
 	local d = {}
 	d.fields   = diff_maps(self, t1.fields  , t2.fields  , diff_fields   , map_fields, sc2)
-	local pk   = diff_maps(self, {pk=t1.pk} , {pk=t2.pk} , diff_col_lists, nil, sc2)
-	d.uks      = diff_maps(self, t1.uks     , t2.uks     , diff_col_lists, nil, sc2)
+	local pk   = diff_maps(self, {pk=t1.pk} , {pk=t2.pk} , diff_ix_cols  , nil, sc2)
+	d.uks      = diff_maps(self, t1.uks     , t2.uks     , diff_ix_cols  , nil, sc2)
 	d.ixs      = diff_maps(self, t1.ixs     , t2.ixs     , diff_ixs      , nil, sc2)
 	d.fks      = diff_maps(self, t1.fks     , t2.fks     , diff_fks      , nil, sc2, sc2.supports_fks      or false)
 	d.checks   = diff_maps(self, t1.checks  , t2.checks  , diff_checks   , nil, sc2, sc2.supports_checks   or false)
@@ -537,12 +581,19 @@ function diff:pp(opt)
 			fld[self.engine..'_default'] or ''
 		)
 	end
-	local function pf_fk(fk)
+	local function format_fk(fk)
 		return _('(%s) -> %s (%s)%s%s', cat(fk.cols, ','), fk.ref_table,
 				cat(fk.ref_cols, ','),
 				catargs(' D:', fk.ondelete) or '',
 				catargs(' U:', fk.onupdate) or ''
 			)
+	end
+	local function ix_cols(ix)
+		local dt = {}
+		for i,s in ipairs(ix) do
+			dt[i] = s .. (ix.desc and ix.desc[i] and ':desc' or '')
+		end
+		return cat(dt, ',')
 	end
 	local function pp_tg(tg, prefix)
 		P('   %1sTG %d %s %s `%s`', prefix or '', tg.pos, tg.when, tg.op, tg.name)
@@ -557,22 +608,24 @@ function diff:pp(opt)
 			print(('-'):rep(80))
 			local pk = tbl.pk and index(tbl.pk)
 			for i,fld in ipairs(tbl.fields) do
-				pp_fld(fld, pk and 'PK'..pk[fld.col])
+				local pki = pk and pk[fld.col]
+				local desc = pki and tbl.pk.desc and tbl.pk.desc[pki]
+				pp_fld(fld, pki and _('%sK%d', desc and 'p' or 'P', pki))
 			end
 			print('    -------')
 			if tbl.uks then
 				for uk_name, uk in sortedpairs(tbl.uks) do
-					P('    UK   %s', cat(uk, ','))
+					P('    UK   %s', ix_cols(uk))
 				end
 			end
 			if tbl.ixs then
 				for ix_name, ix in sortedpairs(tbl.ixs) do
-					P('    IX   %s%s', cat(ix, ','), ix.desc and ' desc' or '')
+					P('    IX   %s', ix_cols(ix))
 				end
 			end
 			if tbl.fks then
 				for fk_name, fk in sortedpairs(tbl.fks) do
-					P('    FK   %s', pf_fk(fk))
+					P('    FK   %s', format_fk(fk))
 				end
 			end
 			if tbl.checks then
@@ -618,29 +671,29 @@ function diff:pp(opt)
 				end
 			end
 			if d.remove_pk then
-				P('   -PK   %s', cat(d.remove_pk, ','))
+					P('   -PK   %s', ix_cols(d.remove_pk))
 			end
 			if d.add_pk then
-				P('   +PK   %s', cat(d.add_pk, ','))
+					P('   +PK   %s', ix_cols(d.add_pk))
 			end
 			if d.uks and d.uks.remove then
 				for uk_name, uk in sortedpairs(d.uks.remove) do
-					P('   -UK   %s', cat(uk, ','))
+					P('   -UK   %s', ix_cols(uk))
 				end
 			end
 			if d.uks and d.uks.add then
 				for uk_name, uk in sortedpairs(d.uks.add) do
-					P('   +UK   %s', cat(uk, ','))
+					P('   +UK   %s', ix_cols(uk))
 				end
 			end
 			if d.ixs and d.ixs.remove then
 				for ix_name, ix in sortedpairs(d.ixs.remove) do
-					P('   -IX   %s', cat(ix, ',')) --TODO: desc
+					P('   -IX   %s', ix_cols(ix)) --TODO: desc
 				end
 			end
 			if d.ixs and d.ixs.add then
 				for ix_name, ix in sortedpairs(d.ixs.add) do
-					P('   +IX   %s', cat(ix, ',')) --TODO: desc
+					P('   +IX   %s', ix_cols(ix)) --TODO: desc
 				end
 			end
 			if d.checks and d.checks.remove then
@@ -655,12 +708,12 @@ function diff:pp(opt)
 			end
 			if d.fks and d.fks.remove then
 				for fk_name, fk in sortedpairs(d.fks.remove) do
-					P('   -FK   %s', pf_fk(fk))
+					P('   -FK   %s', format_fk(fk))
 				end
 			end
 			if d.fks and d.fks.add then
 				for fk_name, fk in sortedpairs(d.fks.add) do
-					P('   +FK   %s', pf_fk(fk))
+					P('   +FK   %s', format_fk(fk))
 				end
 			end
 			if d.triggers and d.triggers.remove then
