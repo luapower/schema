@@ -33,7 +33,7 @@ or even adding foreign keys that reference tables from other modules.
 databases with different engines.
 * use it as a base for a scriptable ETL tool.
 
-## Example
+## Usage
 
 See `schema_std.lua` for type definitions and `webb_lang.lua`
 and `webb_auth.lua` from the [webb] package for examples of
