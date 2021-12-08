@@ -35,37 +35,9 @@ databases with different engines.
 
 ## Example
 
-```lua
-function my_schema()
-
-	flags.not_null = {not_null = true}
-	flags.unsigned = {unsigned = true}
-	flags.autoinc  = {auto_increment = true}
-
-	types.int  = {}
-	types.str  = {}
-	types.text = {}
-
-	types.id      = {int, unsigned}
-	types.auto_id = {id, not_null, pk, autoinc}
-	types.name    = {str, maxlen = 64, charset = 'utf8'}
-
-	tables.foo = {
-		foo_id , auto_id,
-		name   , name, not_null,
-		note   , text,
-	}
-
-	tables.bar = {
-		bar_id    , auto_id,
-		my_foo_id , id, not_null, fk(foo, restrict),
-	}
-
-end
-
-local sc = schema.new{}
-sc:def(my_schema)
-```
+See `schema_std.lua` for type definitions and `webb_lang.lua`
+and `webb_auth.lua` from the [webb] package for examples of
+table definitions.
 
 ### How this works / caveats
 
