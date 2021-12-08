@@ -5,7 +5,23 @@
 if not ... then require'schema_test'; return end
 
 local glue = require'glue'
-require'$'
+
+local add = table.insert
+local cat = table.concat
+local isstr = glue.isstr
+local istab = glue.istab
+local isfunc = glue.isfunc
+local assertf = glue.assert
+local attr = glue.attr
+local update = glue.update
+local names = glue.names
+local pack = glue.pack
+local unpack = glue.unpack
+local keys = glue.keys
+local empty = glue.empty
+local kbytes = glue.kbytes
+local sortedpairs = glue.sortedpairs
+local catargs = glue.catargs
 
 --definition parsing ---------------------------------------------------------
 
@@ -58,6 +74,7 @@ local function parse_cols(self, t, dt, loc1, fld_ct)
 		i = i + 1
 		local fld = {col = col, mode = mode, col_index = #dt + 1}
 		add(dt, fld)
+		dt[col] = fld
 		i = resolve_type(self, fld, t, i, i , fld_ct, true, false)
 		i = resolve_type(self, fld, t, i, #t, fld_ct, false, true)
 	end
@@ -501,7 +518,7 @@ end
 --diff pretty-printing -------------------------------------------------------
 
 local function dots(s, n) return #s > n and s:sub(1, n-2)..'..' or s end
-local tobytes = function(x) return x and glue.tobytes(x) or '' end
+local kbytes = function(x) return x and kbytes(x) or '' end
 local function P(...) print(_(...)) end
 function diff:pp(opt)
 	local BODY = self.engine..'_body'
@@ -516,7 +533,7 @@ function diff:pp(opt)
 			or fld.type == 'bool' and ''
 			or (fld.digits or '')..(fld.decimals and ','..fld.decimals or ''),
 			fld.type == 'number' and not fld.unsigned and '-' or '',
-			tobytes(fld.size) or '', tobytes(fld.maxlen) or '',
+			kbytes(fld.size) or '', kbytes(fld.maxlen) or '',
 			fld[self.engine..'_collation'] or '',
 			fld[self.engine..'_default'] or ''
 		)
@@ -694,7 +711,7 @@ function diff:pp(opt)
 					--or fld.type == 'bool' and ''
 					--or (fld.digits or '')..(fld.decimals and ','..fld.decimals or ''),
 					--fld.type == 'number' and not fld.unsigned and '-' or '',
-					--tobytes(fld.size) or '', tobytes(fld.maxlen) or '',
+					--kbytes(fld.size) or '', kbytes(fld.maxlen) or '',
 					--fld[self.engine..'_collation'] or '',
 				)
 			end
