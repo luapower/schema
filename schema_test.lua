@@ -3,16 +3,16 @@ local function sc1()
 
 	import'schema_std'
 
-	tables.t0 = {
+	tables.t0 = { --to be removed
 		f1, id, pk,
 	}
 
-	tables.t1 = {
+	tables.t1 = { --to be modified
 		f1, idpk, ix, fk(t0),
 		f2, name, uk'f2 desc', check 'a < b',
 	}
 
-	trigger(foo, after, insert, t1, mysql [[
+	trigger(foo, after, insert, t1, mysql [[ --to be removed
 		dude wasup;
 	]])
 
@@ -22,13 +22,13 @@ local function sc2()
 
 	import'schema_std'
 
-	tables.t1 = {
+	tables.t1 = { --to be modified
 		f1, id,
 		f2, bigid, pk, check 'a <= b', ix,
 		f3, name, uk, fk(t1),
 	}
 
-	tables.t2 = {
+	tables.t2 = { --to be added
 		f0, name,
 		f1, id, pk'f1 desc', uk'f0,f1 desc', ix'f0 desc,f1 desc', check 'a > b',
 	}

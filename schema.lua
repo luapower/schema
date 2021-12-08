@@ -22,6 +22,7 @@ local empty = glue.empty
 local kbytes = glue.kbytes
 local sortedpairs = glue.sortedpairs
 local catargs = glue.catargs
+local repl = glue.repl
 
 --definition parsing ---------------------------------------------------------
 
@@ -43,7 +44,7 @@ local function resolve_type(self, fld, t, i, n, fld_ct, allow_types, allow_flags
 			end
 		end
 		if isfunc(v) then --type generator
-			v = v(self, fld_ct, fld, t[i])
+			v = v(self, fld_ct, fld)
 		end
 		if v then
 			resolve_type(self, fld, v, 1, #v, fld_ct, true, true) --recurse
@@ -328,10 +329,6 @@ function schema.env.pk(arg1, ...)
 	end
 end
 
-function schema.env.default(v)
-	return {default = v}
-end
-
 function schema.env.check(body)
 	return function(self, tbl, fld)
 		local name = _('ck_%s__%s', tbl.name, fld.col)
@@ -535,7 +532,7 @@ function diff:pp(opt)
 			fld.type == 'number' and not fld.unsigned and '-' or '',
 			kbytes(fld.size) or '', kbytes(fld.maxlen) or '',
 			fld[self.engine..'_collation'] or '',
-			fld[self.engine..'_default'] or ''
+			repl(repl(fld[self.engine..'_default'], nil, fld.default), nil, '')
 		)
 	end
 	local function format_fk(fk)
@@ -700,22 +697,11 @@ function diff:pp(opt)
 	end
 	if self.procs and self.procs.add then
 		for proc_name, proc in sortedpairs(self.procs.add) do
-			local args = {}; for i,arg in ipairs(proc.args) do
-				args[i] = _('%s %s %s', arg.mode or 'in', arg.col,
-					''
-					--fld.auto_increment and 'A' or '',
-					--prefix or '',
-					--fld.not_null and '*' or '',
-					--dots(fld.col, 16), fld.type or '',
-					--fld.type == 'number' and not fld.digits and '['..fld.size..']'
-					--or fld.type == 'bool' and ''
-					--or (fld.digits or '')..(fld.decimals and ','..fld.decimals or ''),
-					--fld.type == 'number' and not fld.unsigned and '-' or '',
-					--kbytes(fld.size) or '', kbytes(fld.maxlen) or '',
-					--fld[self.engine..'_collation'] or '',
-				)
+			P('  + PROC %s(', proc_name)
+			for i,arg in ipairs(proc.args) do
+				pp_fld(arg)
 			end
-			P('  + PROC %s(\n\t%s\n)\n%s', proc_name, cat(args, ',\n\t'), proc[BODY])
+			P('\t)\n%s', proc[BODY])
 		end
 		print()
 	end

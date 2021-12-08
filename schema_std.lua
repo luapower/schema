@@ -6,7 +6,6 @@ if not ... then require'schema_test'; return end
 
 local M = {}
 do
-
 	local schema = require'schema'
 	local glue = require'glue'
 	local cat = table.concat
@@ -42,7 +41,11 @@ do
 		return v
 	end
 
-	--function M.default(self,
+	function M.default(v) --TODO: this only works for numbers and string constants.
+		return function(self, tbl, fld)
+			return {default = v, mysql_default = tostring(v)}
+		end
+	end
 
 end
 
@@ -96,9 +99,9 @@ return function()
 	types.url       = {str, size = 2048, maxlen = 2048, ascii_bin}
 	types.b64key    = {str, size = 8192, maxlen = 8192, ascii_bin}
 
-	types.atime     = {datetime, not_null, default = '', mysql_default = 'current_timestamp'}
-	types.ctime     = {datetime, not_null, default = '', mysql_default = 'current_timestamp'}
-	types.mtime     = {datetime, not_null, default = '', mysql_default = 'current_timestamp', mysql_on_update = 'current_timestamp'}
+	types.atime     = {datetime, not_null, mysql_default = 'current_timestamp'}
+	types.ctime     = {datetime, not_null, mysql_default = 'current_timestamp'}
+	types.mtime     = {datetime, not_null, mysql_default = 'current_timestamp', mysql_on_update = 'current_timestamp'}
 
 	types.money     = {dec, digits = 15, decimals = 3} -- 999 999 999 999 . 999     (fits in a double)
 	types.qty       = {dec, digits = 15, decimals = 6} --     999 999 999 . 999 999 (fits in a double)
