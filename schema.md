@@ -88,11 +88,10 @@ which is more acceptable.
 
 ## API
 
-<warn>WIP</warn>
-
 --------------------------------- -------------------------------------------
 `schema.new(opt) -> sc`           create a new schema object
-`schema.diff(older_sc, newer_sc)` find out what changed between `older_sc` and `newer_sc`
+`schema.diff(sc1, sc2) -> diff`   find out what changed between `sc1` and `sc2`
+`diff:pp()`                       pretty print a schema diff
 --------------------------------- -------------------------------------------
 
 ## Background & rationale
