@@ -12,6 +12,8 @@ do
 	local names = glue.names
 	local format = string.format
 	local outdent = glue.outdent
+	local trim = glue.trim
+	local _ = string.format
 
 	function M.enum(...) --mysql-specific `enum` type
 		local vals = names(cat({...}, ' '))
@@ -26,7 +28,7 @@ do
 	end
 
 	function M.mysql(s) --mysql code for triggers and stored procs.
-		return {mysql_body = _('begin\n%s\nend', outdent(outdent(s):trim(), '\t'))}
+		return {mysql_body = _('begin\n%s\nend', outdent(trim(outdent(s)), '\t'))}
 	end
 
 	function M.bool_to_lua(v) --`to_lua` for the `bool` type stored as `tinyint`.
@@ -109,8 +111,8 @@ return function()
 	types.count     = {uint, not_null, default = 0, mysql_default = '0'}
 	types.pos       = {uint}
 
-	types.lang      = {chr, size = 2, maxlen = 2, ascii_bin}
-	types.currency  = {chr, size = 3, maxlen = 3, ascii_bin}
-	types.country   = {chr, size = 2, maxlen = 2, ascii_bin}
+	types.lang      = {chr, size = 2, maxlen = 2, ascii_ci}
+	types.currency  = {chr, size = 3, maxlen = 3, ascii_ci}
+	types.country   = {chr, size = 2, maxlen = 2, ascii_ci}
 
 end

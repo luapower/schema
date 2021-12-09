@@ -53,11 +53,11 @@ require'webb_auth'
 require'webb_lang'
 local auth_schema = webb.auth_schema
 local lang_schema = webb.lang_schema
-local sp_schema = require'sp'.schema
 
 local getfenv = getfenv
 local pairs = pairs
 local print = print
+local update = glue.update
 
 sc:import(function()
 	import'schema_std'
@@ -67,7 +67,6 @@ sc:import(function()
 
 	import(auth_schema)
 	import(lang_schema)
-	import(sp_schema)
 
 	tables.blah = {
 		id, pk,
@@ -103,7 +102,7 @@ webb.run(function()
 		local sc1 = schema.new(st1):import(sc1)
 		local sc2 = schema.new(st2):import(sc2)
 		local d = schema.diff(sc1, sc2)
-		pp(d)
+		--pp(d)
 		d:pp()
 	end
 

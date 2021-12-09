@@ -23,6 +23,11 @@ local kbytes = glue.kbytes
 local sortedpairs = glue.sortedpairs
 local catargs = glue.catargs
 local repl = glue.repl
+local imap = glue.imap
+local _ = string.format
+local trim = glue.trim
+local index = glue.index
+local outdent = glue.outdent
 
 --definition parsing ---------------------------------------------------------
 
@@ -122,7 +127,7 @@ local function parse_ix_cols(fld, ...) --'col1 [desc], ...'
 	local s = cat({...}, ',')
 	local dt = {desc = {}}
 	for s in s:gmatch'[^,]+' do
-		s = s:trim()
+		s = trim(s)
 		local name, desc = s:match'(.-)%s+desc$'
 		if name then
 			desc = true
@@ -281,9 +286,9 @@ local function fk_func(force_ondelete, force_onupdate)
 		end
 	end
 end
-schema.env.fk       = fk_func()
-schema.env.child_fk = fk_func'cascade'
-schema.env.weak_fk  = fk_func'set null'
+schema.env.fk       = fk_func(nil, 'cascade')
+schema.env.child_fk = fk_func('cascade', 'cascade')
+schema.env.weak_fk  = fk_func('set null', 'cascade')
 
 function schema:add_fk(tbl, cols, ...)
 	local tbl = assertf(self.tables[tbl], 'unknown table `%s`', tbl)
@@ -538,8 +543,8 @@ function diff:pp(opt)
 	local function format_fk(fk)
 		return _('(%s) -> %s (%s)%s%s', cat(fk.cols, ','), fk.ref_table,
 				cat(fk.ref_cols, ','),
-				catargs(' D:', fk.ondelete) or '',
-				catargs(' U:', fk.onupdate) or ''
+				fk.ondelete and ' D:'..fk.ondelete or '',
+				fk.onupdate and ' U:'..fk.onupdate or ''
 			)
 	end
 	local function ix_cols(ix)
@@ -606,6 +611,9 @@ function diff:pp(opt)
 	if self.tables and self.tables.update then
 		local hide_attrs = opt and opt.hide_attrs
 		for tbl_name, d in sortedpairs(self.tables.update) do
+			if opt and opt.tables and not opt.tables[tbl_name] then
+				goto skip
+			end
 			P(' ~ TABLE %s', tbl_name)
 			print(('-'):rep(80))
 			if d.fields and d.fields.add then
@@ -676,11 +684,12 @@ function diff:pp(opt)
 				end
 			end
 			if d.triggers and d.triggers.add then
-				for trg_name, trg in sortedpairs(d.triggers.add) do
+				for tg_name, tg in sortedpairs(d.triggers.add) do
 					pp_tg(tg, '+')
 				end
 			end
 			print()
+			::skip::
 		end
 	end
 	if self.tables and self.tables.remove then
