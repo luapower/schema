@@ -55,6 +55,8 @@ return function()
 
 	import(M)
 
+	current_timestamp = {'current_timestamp'}
+
 	flags.not_null   = {not_null = true}
 	flags.autoinc    = {auto_increment = true}
 	flags.ascii_ci   = {charset = ascii, collation = 'ascii_ci'  , mysql_charset = 'ascii'  , mysql_collation = 'ascii_general_ci'}
@@ -101,9 +103,9 @@ return function()
 	types.url       = {str, size = 2048, maxlen = 2048, ascii_bin}
 	types.b64key    = {str, size = 8192, maxlen = 8192, ascii_bin}
 
-	types.atime     = {datetime, not_null, mysql_default = 'current_timestamp'}
-	types.ctime     = {datetime, not_null, mysql_default = 'current_timestamp'}
-	types.mtime     = {datetime, not_null, mysql_default = 'current_timestamp', mysql_on_update = 'current_timestamp'}
+	types.atime     = {datetime, not_null, mysql_default = current_timestamp}
+	types.ctime     = {datetime, not_null, mysql_default = current_timestamp}
+	types.mtime     = {datetime, not_null, mysql_default = current_timestamp, mysql_on_update = current_timestamp}
 
 	types.money     = {dec, digits = 15, decimals = 3} -- 999 999 999 999 . 999     (fits in a double)
 	types.qty       = {dec, digits = 15, decimals = 6} --     999 999 999 . 999 999 (fits in a double)

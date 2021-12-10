@@ -151,9 +151,12 @@ local function check_cols(T, tbl, cols)
 	return cols
 end
 
+local function return_false() return false end
+
 local function add_pk(tbl, cols)
 	assertf(not tbl.pk, 'pk already applied for table `%s`', tbl.name)
 	tbl.pk = check_cols('pk', tbl, cols)
+	tbl.pk.desc = imap(cols, return_false)
 end
 
 local function add_ix(T, tbl, cols)
@@ -168,7 +171,9 @@ local function add_fk(self, tbl, cols, ref_tbl, ondelete, onupdate, fld)
 	local k = _('fk_%s__%s', tbl.name, cat(cols, '_'))
 	assertf(not fks[k], 'duplicate fk `%s`', k)
 	ref_tbl = ref_tbl or assert(#cols == 1 and cols[1])
-	local fk = {table = tbl.name, cols = check_cols('fk', tbl, cols),
+	local cols = check_cols('fk', tbl, cols)
+	cols.desc = imap(cols, return_false)
+	local fk = {table = tbl.name, cols = cols,
 		ref_table = ref_tbl, ondelete = ondelete, onupdate = onupdate}
 	fks[k] = fk
 	attr(tbl, 'deps')[ref_tbl] = true
@@ -224,10 +229,10 @@ do
 		self.env = env
 		self.loaded = {}
 
-		function env.import      (...) self:import      (...) end
-		function env.add_fk      (...) self:add_fk      (...) end
-		function env.trigger     (...) self:add_trigger (...) end
-		function env.proc        (...) self:add_proc    (...) end
+		function env.import  (...) self:import      (...) end
+		function env.add_fk  (...) self:add_fk      (...) end
+		function env.trigger (...) self:add_trigger (...) end
+		function env.proc    (...) self:add_proc    (...) end
 
 		return self
 	end
@@ -376,8 +381,6 @@ function schema:add_cols(...)
 	--TODO:
 end
 
-schema.env.null = function() end
-
 function schema:check_refs()
 	if not self.table_refs or not next(self.table_refs) then return end
 	assertf(false, 'unresolved refs to tables: %s', cat(keys(self.table_refs, true), ', '))
@@ -424,13 +427,13 @@ end
 local function diff_arrays(a1, a2)
 	a1 = a1 or empty
 	a2 = a2 or empty
-	if #a1 ~= #a2 then return end
+	if #a1 ~= #a2 then return true end
 	for i,s in ipairs(a1) do
-		if a2[i] ~= s then return end
+		if a2[i] ~= s then return true end
 	end
-	return true
+	return false
 end
-local function diff_ix_cols(self, c1, c2)
+local function diff_ixs(self, c1, c2)
 	return diff_arrays(c1, c2) or diff_arrays(c1.desc, c2.desc)
 end
 
@@ -450,18 +453,14 @@ local function diff_fields(self, f1, f2, sc2)
 	return diff_keys(self, f1, f2, sc2.relevant_field_attrs)
 end
 
-local function diff_ixs(self, ix1, ix2)
-	return diff_ix_cols(self, ix1, ix2) or ix1.desc ~= ix2.desc
-end
-
 local function diff_fks(self, fk1, fk2)
 	return diff_keys(self, fk1, fk2, {
 		table=1,
 		ref_table=1,
 		onupdate=1,
 		ondelete=1,
-		cols=function(self, c1, c2) return diff_ix_cols(self, c1, c2) end,
-		ref_cols=function(self, c1, c2) return diff_ix_cols(self, c1, c2) end,
+		cols=function(self, c1, c2) return diff_ixs(self, c1, c2) end,
+		ref_cols=function(self, c1, c2) return diff_ixs(self, c1, c2) end,
 	})
 end
 
@@ -491,8 +490,8 @@ end
 local function diff_tables(self, t1, t2, sc2)
 	local d = {}
 	d.fields   = diff_maps(self, t1.fields  , t2.fields  , diff_fields   , map_fields, sc2, true)
-	local pk   = diff_maps(self, {pk=t1.pk} , {pk=t2.pk} , diff_ix_cols  , nil, sc2, true)
-	d.uks      = diff_maps(self, t1.uks     , t2.uks     , diff_ix_cols  , nil, sc2, true)
+	local pk   = diff_maps(self, {pk=t1.pk} , {pk=t2.pk} , diff_ixs      , nil, sc2, true)
+	d.uks      = diff_maps(self, t1.uks     , t2.uks     , diff_ixs      , nil, sc2, true)
 	d.ixs      = diff_maps(self, t1.ixs     , t2.ixs     , diff_ixs      , nil, sc2, true)
 	d.fks      = diff_maps(self, t1.fks     , t2.fks     , diff_fks      , nil, sc2, sc2.supports_fks     )
 	d.checks   = diff_maps(self, t1.checks  , t2.checks  , diff_checks   , nil, sc2, sc2.supports_checks  )
@@ -630,6 +629,9 @@ function diff:pp(opt)
 				for col, d in sortedpairs(d.fields.update) do
 					pp_fld(d.old, '<')
 					pp_fld(d.new, '>')
+					for k in sortedpairs(d.changed) do
+						P('           %-14s %s -> %s', k, d.old[k], d.new[k])
+					end
 				end
 			end
 			if d.remove_pk then
