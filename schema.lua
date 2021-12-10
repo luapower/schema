@@ -28,6 +28,7 @@ local _ = string.format
 local trim = glue.trim
 local index = glue.index
 local outdent = glue.outdent
+local extend = glue.extend
 
 --definition parsing ---------------------------------------------------------
 
@@ -38,16 +39,17 @@ local function isschema(t) return istab(t) and t.is_schema end
 
 local schema = {is_schema = true, package = {}, isschema = isschema}
 
-local function resolve_type(self, fld, t, i, n, fld_ct, allow_types, allow_flags)
+local function resolve_type(self, fld, t, i, n, fld_ct, allow_types, allow_flags, allow_unknown)
 	for i = i, n do
 		local k = t[i]
 		local v = k
 		if isstr(v) then --type name, flag name or next field
 			v = allow_types and self.types[k] or allow_flags and self.flags[k]
-			if not v then --next field
+			if not v and allow_unknown then --next field
 				return i
 			end
 		end
+		assertf(v ~= nil, 'unknown flag or type name `%s`', k)
 		if isfunc(v) then --type generator
 			v = v(self, fld_ct, fld)
 		end
@@ -82,22 +84,18 @@ local function parse_cols(self, t, dt, loc1, fld_ct)
 		add(dt, fld)
 		dt[col] = fld
 		i = resolve_type(self, fld, t, i, i , fld_ct, true, false)
-		i = resolve_type(self, fld, t, i, #t, fld_ct, false, true)
+		i = resolve_type(self, fld, t, i, #t, fld_ct, false, true, true)
 	end
 end
 
---add convenience ref fields for automatic lookup.
---TODO: move this to xrowset_sql?
-local function add_ref_col(self, tbl, fld, fk)
+local function resolve_fk(fk, tbl, ref_tbl)
+	assertf(ref_tbl.pk, 'ref table `%s` has no PK', ref_tbl.name)
+	fk.ref_cols = extend({}, ref_tbl.pk)
+	--add convenience ref fields for automatic lookup in x-widgets.
 	if #fk.cols == 1 then
-		local fk_tbl = fk.table == tbl.name and tbl or self.tables[fk.table]
-		local fk_col = fk.cols[1]
-		for _, fld in ipairs(fk_tbl.fields) do
-			if fld.col == fk_col then
-				fld.ref_table = name
-				fld.ref_col   = tbl.pk[1]
-			end
-		end
+		local fld = tbl.fields[fk.cols[1]]
+		fld.ref_table = ref_tbl.name
+		fld.ref_col   = ref_tbl.pk[1]
 	end
 end
 
@@ -108,8 +106,10 @@ local function parse_table(self, name, t)
 	local fks = self.table_refs and self.table_refs[name]
 	if fks then
 		for fk in pairs(fks) do
-			fk.ref_cols = tbl.pk
-			add_ref_col(self, tbl, fld, fk)
+			local fk_tbl =
+				fk.table == name and tbl --self-reference
+				or self.tables[fk.table]
+			resolve_fk(fk, fk_tbl, tbl)
 		end
 		self.table_refs[name] = nil
 	end
@@ -166,27 +166,23 @@ local function add_ix(T, tbl, cols)
 	t[k] = check_cols(T, tbl, cols)
 end
 
-local function add_fk(self, tbl, cols, ref_tbl, ondelete, onupdate, fld)
+local function add_fk(self, tbl, cols, ref_tbl_name, ondelete, onupdate, fld)
 	local fks = attr(tbl, 'fks')
 	local k = _('fk_%s__%s', tbl.name, cat(cols, '_'))
 	assertf(not fks[k], 'duplicate fk `%s`', k)
-	ref_tbl = ref_tbl or assert(#cols == 1 and cols[1])
+	ref_tbl_name = ref_tbl_name or assert(#cols == 1 and cols[1])
 	local cols = check_cols('fk', tbl, cols)
 	cols.desc = imap(cols, return_false)
 	local fk = {table = tbl.name, cols = cols,
-		ref_table = ref_tbl, ondelete = ondelete, onupdate = onupdate}
+		ref_table = ref_tbl_name, ondelete = ondelete, onupdate = onupdate}
 	fks[k] = fk
-	attr(tbl, 'deps')[ref_tbl] = true
-	local ref_tbl_t = self.tables[ref_tbl]
-	if ref_tbl_t then
-		fk.ref_cols = assertf(ref_tbl_t.pk, 'ref table `%s` has no PK', ref_tbl)
-		--TODO: move this to xrowset_sql.
-		if fld then
-			fld.ref_table = ref_tbl
-			fld.ref_col   = ref_tbl_t.pk[1]
-		end
+	local ref_tbl =
+		ref_tbl_name == tbl.name and tbl --self-reference
+		or self.tables[ref_tbl_name]
+	if ref_tbl then
+		resolve_fk(fk, tbl, ref_tbl)
 	else --we'll resolve it when the table is defined later.
-		attr(attr(self, 'table_refs'), ref_tbl)[fk] = true
+		attr(attr(self, 'table_refs'), ref_tbl_name)[fk] = true
 	end
 end
 
@@ -304,7 +300,7 @@ local function ix_func(T)
 	return function(arg1, ...)
 		if isschema(arg1) then --used as flag: make an index on current field.
 			local self, tbl, fld = arg1, ...
-			add_ix(T, tbl, {fld.col})
+			add_ix(T, tbl, {fld.col, desc = {false}})
 			fld[T] = true
 		else --called by user, return a flag generator.
 			local cols = pack(arg1, ...)
@@ -461,12 +457,14 @@ local function diff_fks(self, fk1, fk2)
 		ondelete=1,
 		cols=function(self, c1, c2) return diff_ixs(self, c1, c2) end,
 		ref_cols=function(self, c1, c2) return diff_ixs(self, c1, c2) end,
-	})
+	}) and true
 end
 
 local function diff_checks(self, c1, c2)
 	local BODY = self.engine..'_body'
-	return c1[BODY] ~= c2[BODY] or c1.body ~= c2.body
+	local b1 = c1[BODY] or c1.body
+	local b2 = c2[BODY] or c2.body
+	return b1 ~= b2
 end
 
 local function diff_triggers(self, t1, t2)
@@ -475,16 +473,17 @@ local function diff_triggers(self, t1, t2)
 		when=1,
 		op=1,
 		[self.engine..'_body']=1,
-	})
+	}) and true
 end
 
 local function diff_procs(self, p1, p2, sc2)
+	local BODY = self.engine..'_body'
 	return diff_keys(self, p1, p2, {
-		[self.engine..'_body']=1,
+		[BODY]=1,
 		args=function(self, a1, a2)
 			return diff_maps(self, a1, a2, diff_fields, map_fields, sc2, true) and true
 		end,
-	})
+	}) and true
 end
 
 local function diff_tables(self, t1, t2, sc2)
@@ -510,7 +509,7 @@ function schema.diff(sc2, sc1, opt) --sync sc2 to sc1.
 	local sc2 = assertf(isschema(sc2) and sc2, 'schema expected, got `%s`', type(sc2))
 	sc1:check_refs()
 	sc2:check_refs()
-	local self = {engine = sc2.engine, __index = diff}
+	local self = {engine = sc2.engine, __index = diff, old_schema = sc2, new_schema = sc1}
 	self.tables = diff_maps(self, sc1.tables, sc2.tables, diff_tables, nil, sc2, true)
 	self.procs  = diff_maps(self, sc1.procs , sc2.procs , diff_procs , nil, sc2, sc2.supports_procs)
 	return setmetatable(self, self)
@@ -524,7 +523,7 @@ local function P(...) print(_(...)) end
 function diff:pp(opt)
 	local BODY = self.engine..'_body'
 	print()
-	local function pp_fld(fld, prefix)
+	local function P_fld(fld, prefix)
 		P(' %1s %3s %-2s%-16s %-8s %4s%1s %6s %6s %-18s %s',
 			fld.auto_increment and 'A' or '',
 			prefix or '',
@@ -553,7 +552,7 @@ function diff:pp(opt)
 		end
 		return cat(dt, ',')
 	end
-	local function pp_tg(tg, prefix)
+	local function P_tg(tg, prefix)
 		P('   %1sTG %d %s %s `%s`', prefix or '', tg.pos, tg.when, tg.op, tg.name)
 		if prefix ~= '-' then
 			print(outdent(tg[BODY], '         '))
@@ -568,7 +567,7 @@ function diff:pp(opt)
 			for i,fld in ipairs(tbl.fields) do
 				local pki = pk and pk[fld.col]
 				local desc = pki and tbl.pk.desc and tbl.pk.desc[pki]
-				pp_fld(fld, pki and _('%sK%d', desc and 'p' or 'P', pki))
+				P_fld(fld, pki and _('%sK%d', desc and 'p' or 'P', pki))
 			end
 			print('    -------')
 			if tbl.uks then
@@ -601,7 +600,7 @@ function diff:pp(opt)
 					return a.pos < b.pos
 				end
 				for tg_name, tg in sortedpairs(tgs, cmp_tg) do
-					pp_tg(tg)
+					P_tg(tg)
 				end
 			end
 			print()
@@ -617,18 +616,18 @@ function diff:pp(opt)
 			print(('-'):rep(80))
 			if d.fields and d.fields.add then
 				for col, fld in sortedpairs(d.fields.add) do
-					pp_fld(fld, '+')
+					P_fld(fld, '+')
 				end
 			end
 			if d.fields and d.fields.remove then
 				for col, fld in sortedpairs(d.fields.remove) do
-					pp_fld(fld, '-')
+					P_fld(fld, '-')
 				end
 			end
 			if d.fields and d.fields.update then
 				for col, d in sortedpairs(d.fields.update) do
-					pp_fld(d.old, '<')
-					pp_fld(d.new, '>')
+					P_fld(d.old, '<')
+					P_fld(d.new, '>')
 					for k in sortedpairs(d.changed) do
 						P('           %-14s %s -> %s', k, d.old[k], d.new[k])
 					end
@@ -682,12 +681,12 @@ function diff:pp(opt)
 			end
 			if d.triggers and d.triggers.remove then
 				for tg_name, tg in sortedpairs(d.triggers.remove) do
-					pp_tg(tg, '-')
+					P_tg(tg, '-')
 				end
 			end
 			if d.triggers and d.triggers.add then
 				for tg_name, tg in sortedpairs(d.triggers.add) do
-					pp_tg(tg, '+')
+					P_tg(tg, '+')
 				end
 			end
 			print()
@@ -708,9 +707,9 @@ function diff:pp(opt)
 	end
 	if self.procs and self.procs.add then
 		for proc_name, proc in sortedpairs(self.procs.add) do
-			P('  + PROC %s(', proc_name)
+			P(' + PROC %s(', proc_name)
 			for i,arg in ipairs(proc.args) do
-				pp_fld(arg)
+				P_fld(arg)
 			end
 			P('\t)\n%s', proc[BODY])
 		end

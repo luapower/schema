@@ -18,7 +18,7 @@ do
 	function M.enum(...) --mysql-specific `enum` type
 		local vals = names(cat({...}, ' '))
 		return {is_type = true, type = 'enum', mysql_type = 'enum', enum_values = vals,
-			charset = 'ascii', collation = 'ascii_general_ci' , mysql_collation = 'ascii_general_ci'}
+			charset = 'ascii', collation = 'ascii_general_ci', mysql_collation = 'ascii_general_ci'}
 	end
 
 	function M.set(...) --mysql-specific `set` type
@@ -28,7 +28,8 @@ do
 	end
 
 	function M.mysql(s) --mysql code for triggers and stored procs.
-		return {mysql_body = _('begin\n%s\nend', outdent(trim(outdent(s)), '\t'))}
+		return {mysql_body = _('begin\n%s\nend',
+			outdent(trim(outdent((s:gsub('\r\n', '\n')))), '\t'))}
 	end
 
 	function M.bool_to_lua(v) --`to_lua` for the `bool` type stored as `tinyint`.
@@ -59,11 +60,11 @@ return function()
 
 	flags.not_null   = {not_null = true}
 	flags.autoinc    = {auto_increment = true}
-	flags.ascii_ci   = {charset = ascii, collation = 'ascii_ci'  , mysql_charset = 'ascii'  , mysql_collation = 'ascii_general_ci'}
-	flags.ascii_bin  = {charset = ascii, collation = 'ascii_bin' , mysql_charset = 'ascii'  , mysql_collation = 'ascii_bin'}
-	flags.utf8_ci    = {charset = utf8 , collation = 'utf8_ci'   , mysql_charset = 'utf8mb4', mysql_collation = 'utf8mb4_0900_as_ci'}
-	flags.utf8_ai_ci = {charset = utf8 , collation = 'utf8_ai_ci', mysql_charset = 'utf8mb4', mysql_collation = 'utf8mb4_0900_ai_ci'}
-	flags.utf8_bin   = {charset = utf8 , collation = 'utf8_bin'  , mysql_charset = 'utf8mb4', mysql_collation = 'utf8mb4_0900_bin'}
+	flags.ascii_ci   = {charset = ascii, collation = 'ascii_ci'  , mysql_collation = 'ascii_general_ci'}
+	flags.ascii_bin  = {charset = ascii, collation = 'ascii_bin' , mysql_collation = 'ascii_bin'}
+	flags.utf8_ci    = {charset = utf8 , collation = 'utf8_ci'   , mysql_collation = 'utf8mb4_0900_as_ci'}
+	flags.utf8_ai_ci = {charset = utf8 , collation = 'utf8_ai_ci', mysql_collation = 'utf8mb4_0900_ai_ci'}
+	flags.utf8_bin   = {charset = utf8 , collation = 'utf8_bin'  , mysql_collation = 'utf8mb4_0900_bin'}
 
 	types.bool      = {type = 'bool', mysql_type = 'tinyint', size = 1, unsigned = true, decimals = 0, to_lua = bool_to_lua}
 	types.bool0     = {bool , not_null, default = false, mysql_default = '0'}
@@ -84,7 +85,7 @@ return function()
 	types.text      = {str, mysql_type = 'text', size = 0xffff, maxlen = 0xffff, utf8_bin}
 	types.chr       = {str, mysql_type = 'char', padded = true}
 	types.blob      = {type = 'binary', mysql_type = 'mediumblob', size = 0xffffff}
-	types.time      = {type = 'time', mysql_type = 'bigint'}
+	types.time      = {int52, type = 'time'}
 	types.timeofday = {type = 'timeofday', mysql_type = 'time'}
 	types.date      = {type = 'date', mysql_type = 'date', to_sql = date_to_sql}
 	types.datetime  = {type = 'date', has_time = true, mysql_type = 'datetime'}
