@@ -13,12 +13,18 @@ do
 	local format = string.format
 	local outdent = glue.outdent
 	local trim = glue.trim
+	local index = glue.index
 	local _ = string.format
 
 	function M.enum(...) --mysql-specific `enum` type
 		local vals = names(cat({...}, ' '))
-		return {is_type = true, type = 'enum', mysql_type = 'enum', enum_values = vals,
-			charset = 'ascii', collation = 'ascii_general_ci', mysql_collation = 'ascii_general_ci'}
+		return {is_type = true,
+			type = 'enum', enum_values = vals, charset = 'ascii', collation = 'ascii_ci',
+			enum_indices = index(vals),
+			mysql_type = 'enum', mysql_collation = 'ascii_general_ci',
+			tarantool_type = 'string',
+			tarantool_collation = 'none',
+		}
 	end
 
 	function M.set(...) --mysql-specific `set` type
@@ -46,7 +52,7 @@ do
 
 	function M.default(v) --TODO: this only works for numbers and string constants.
 		return function(self, tbl, fld)
-			return {default = v, mysql_default = tostring(v)}
+			return {default = v, mysql_default = tostring(v), tarantool_default = v}
 		end
 	end
 
@@ -60,36 +66,36 @@ return function()
 
 	flags.not_null   = {not_null = true}
 	flags.autoinc    = {auto_increment = true}
-	flags.ascii_ci   = {charset = ascii, collation = 'ascii_ci'  , mysql_collation = 'ascii_general_ci'}
-	flags.ascii_bin  = {charset = ascii, collation = 'ascii_bin' , mysql_collation = 'ascii_bin'}
-	flags.utf8_ci    = {charset = utf8 , collation = 'utf8_ci'   , mysql_collation = 'utf8mb4_0900_as_ci'}
-	flags.utf8_ai_ci = {charset = utf8 , collation = 'utf8_ai_ci', mysql_collation = 'utf8mb4_0900_ai_ci'}
-	flags.utf8_bin   = {charset = utf8 , collation = 'utf8_bin'  , mysql_collation = 'utf8mb4_0900_bin'}
+	flags.ascii_ci   = {charset = ascii, collation = 'ascii_ci'  , mysql_collation = 'ascii_general_ci'  , tarantool_collation = 'unicode_ci'}
+	flags.ascii_bin  = {charset = ascii, collation = 'ascii_bin' , mysql_collation = 'ascii_bin'         , tarantool_collation = 'binary'}
+	flags.utf8_ci    = {charset = utf8 , collation = 'utf8_ci'   , mysql_collation = 'utf8mb4_0900_as_ci', tarantool_collation = 'unicode_ci'}
+	flags.utf8_ai_ci = {charset = utf8 , collation = 'utf8_ai_ci', mysql_collation = 'utf8mb4_0900_ai_ci', tarantool_collation = 'unicode_ci'}
+	flags.utf8_bin   = {charset = utf8 , collation = 'utf8_bin'  , mysql_collation = 'utf8mb4_0900_bin'  , tarantool_collation = 'binary'}
 
-	types.bool      = {type = 'bool', mysql_type = 'tinyint', size = 1, unsigned = true, decimals = 0, to_lua = bool_to_lua}
-	types.bool0     = {bool , not_null, default = false, mysql_default = '0'}
-	types.bool1     = {bool , not_null, default = true , mysql_default = '1'}
-	types.int8      = {type = 'number', size = 1, decimals = 0, mysql_type = 'tinyint'  , min = -(2^ 7-1), max = 2^ 7}
-	types.int16     = {type = 'number', size = 2, decimals = 0, mysql_type = 'smallint' , min = -(2^15-1), max = 2^15}
-	types.int       = {type = 'number', size = 4, decimals = 0, mysql_type = 'int'      , min = -(2^31-1), max = 2^31}
-	types.int52     = {type = 'number', size = 8, decimals = 0, mysql_type = 'bigint'   , min = -(2^52-1), max = 2^51}
+	types.bool      = {type = 'bool', mysql_type = 'tinyint', size = 1, unsigned = true, decimals = 0, mysql_to_lua = bool_to_lua, tarantool_type = 'boolean'}
+	types.bool0     = {bool , not_null, default = false, mysql_default = '0', tarantool_default = false}
+	types.bool1     = {bool , not_null, default = true , mysql_default = '1', tarantool_default = true}
+	types.int8      = {type = 'number', size = 1, decimals = 0, mysql_type = 'tinyint'  , min = -(2^ 7-1), max = 2^ 7, tarantool_type = 'integer'}
+	types.int16     = {type = 'number', size = 2, decimals = 0, mysql_type = 'smallint' , min = -(2^15-1), max = 2^15, tarantool_type = 'integer'}
+	types.int       = {type = 'number', size = 4, decimals = 0, mysql_type = 'int'      , min = -(2^31-1), max = 2^31, tarantool_type = 'integer'}
+	types.int52     = {type = 'number', size = 8, decimals = 0, mysql_type = 'bigint'   , min = -(2^52-1), max = 2^51, tarantool_type = 'integer'}
 	types.uint8     = {int8 , unsigned = true, min = 0, max = 2^ 8-1}
 	types.uint16    = {int16, unsigned = true, min = 0, max = 2^16-1}
 	types.uint      = {int  , unsigned = true, min = 0, max = 2^32-1}
 	types.uint52    = {int52, unsigned = true, min = 0, max = 2^52-1}
-	types.double    = {type = 'number' , size = 8, mysql_type = 'double'}
-	types.float     = {type = 'number' , size = 4, mysql_type = 'float'}
-	types.dec       = {type = 'decimal', mysql_type = 'decimal'}
-	types.str       = {type = 'text'  , mysql_type = 'varchar'}
-	types.bin       = {type = 'binary', mysql_type = 'varbinary'}
+	types.double    = {type = 'number' , size = 8, mysql_type = 'double', tarantool_type = 'number'}
+	types.float     = {type = 'number' , size = 4, mysql_type = 'float' , tarantool_type = 'number'}
+	types.dec       = {type = 'decimal', mysql_type = 'decimal', tarantool_type = 'number'}
+	types.str       = {type = 'text'  , mysql_type = 'varchar', tarantool_type = 'string'}
+	types.bin       = {type = 'binary', mysql_type = 'varbinary', tarantool_type = 'string'}
 	types.text      = {str, mysql_type = 'text', size = 0xffff, maxlen = 0xffff, utf8_bin}
 	types.chr       = {str, mysql_type = 'char', padded = true}
-	types.blob      = {type = 'binary', mysql_type = 'mediumblob', size = 0xffffff}
-	types.time      = {int52, type = 'time'}
-	types.timeofday = {type = 'timeofday', mysql_type = 'time'}
-	types.date      = {type = 'date', mysql_type = 'date', to_sql = date_to_sql}
-	types.datetime  = {type = 'date', has_time = true, mysql_type = 'datetime'}
-	types.timestamp = {datetime, mysql_type = 'timestamp'}
+	types.blob      = {type = 'binary', mysql_type = 'mediumblob', size = 0xffffff, tarantool_type = 'string', tarantool_collation = 'none'}
+	types.time      = {int52, type = 'time', tarantool_type = 'number'}
+	types.timeofday = {type = 'timeofday', mysql_type = 'time', tarantool_type = 'number'}
+	types.date      = {type = 'date', mysql_type = 'date', mysql_to_sql = date_to_sql, tarantool_type = 'number'}
+	types.datetime  = {type = 'date', has_time = true, mysql_type = 'datetime', tarantool_type = 'number'}
+	types.timestamp = {datetime, mysql_type = 'timestamp', tarantool_type = 'number'}
 
 	types.id        = {uint}
 	types.idpk      = {id, pk, autoinc}
@@ -111,7 +117,7 @@ return function()
 	types.money     = {dec, digits = 15, decimals = 3} -- 999 999 999 999 . 999     (fits in a double)
 	types.qty       = {dec, digits = 15, decimals = 6} --     999 999 999 . 999 999 (fits in a double)
 	types.percent   = {dec, digits =  8, decimals = 2} --         999 999 . 99
-	types.count     = {uint, not_null, default = 0, mysql_default = '0'}
+	types.count     = {uint, not_null, default(0)}
 	types.pos       = {uint}
 
 	types.lang      = {chr, size = 2, maxlen = 2, ascii_ci}

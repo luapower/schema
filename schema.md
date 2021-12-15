@@ -117,4 +117,3 @@ rename and a column delete & add and other things like that.
 
 * minor things like not having to worry about dependency order when defining
 the schema (eg. defining foreign keys pointing to tables that are not yet defined).
-

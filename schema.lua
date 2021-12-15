@@ -468,11 +468,12 @@ local function diff_checks(self, c1, c2)
 end
 
 local function diff_triggers(self, t1, t2)
+	local BODY = self.engine..'_body'
 	return diff_keys(self, t1, t2, {
 		pos=1,
 		when=1,
 		op=1,
-		[self.engine..'_body']=1,
+		[BODY]=1,
 	}) and true
 end
 
@@ -553,6 +554,7 @@ function diff:pp(opt)
 		return cat(dt, ',')
 	end
 	local function P_tg(tg, prefix)
+		if not tg[BODY] then return end
 		P('   %1sTG %d %s %s `%s`', prefix or '', tg.pos, tg.when, tg.op, tg.name)
 		if prefix ~= '-' then
 			print(outdent(tg[BODY], '         '))
@@ -700,18 +702,22 @@ function diff:pp(opt)
 		print()
 	end
 	if self.procs and self.procs.remove then
-		for proc_name in sortedpairs(self.procs.remove) do
-			P(' - PROC %s', proc_name)
+		for proc_name, proc in sortedpairs(self.procs.remove) do
+			if proc[BODY] then
+				P(' - PROC %s', proc_name)
+			end
 		end
 		print()
 	end
 	if self.procs and self.procs.add then
 		for proc_name, proc in sortedpairs(self.procs.add) do
-			P(' + PROC %s(', proc_name)
-			for i,arg in ipairs(proc.args) do
-				P_fld(arg)
+			if proc[BODY] then
+				P(' + PROC %s(', proc_name)
+				for i,arg in ipairs(proc.args) do
+					P_fld(arg)
+				end
+				P('\t)\n%s', proc[BODY])
 			end
-			P('\t)\n%s', proc[BODY])
 		end
 		print()
 	end

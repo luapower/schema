@@ -44,9 +44,7 @@ local function sc2()
 end
 
 local schema = require'schema'
-local spp = require'sqlpp'.new()
-require'sqlpp_mysql'
-spp.import'mysql'
+local spp = require'sqlpp'.new'mysql'
 
 local sc = schema.new()
 require'webb_auth'
