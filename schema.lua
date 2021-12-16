@@ -80,7 +80,12 @@ local function parse_cols(self, t, dt, loc1, fld_ct)
 		col = t[i]
 		assertf(isstr(col), 'column name expected for `%s`, got %s', loc1, type(col))
 		i = i + 1
-		local fld = {col = col, mode = mode, col_index = #dt + 1}
+		local fld = {col = col, mode = mode}
+		if fld_ct.is_table then
+			local col_pos = #dt + 1
+			fld.col_pos = col_pos
+			fld.col_in_front = col_pos > 1 and dt[col_pos-1].col
+		end
 		add(dt, fld)
 		dt[col] = fld
 		i = resolve_type(self, fld, t, i, i , fld_ct, true, false)
