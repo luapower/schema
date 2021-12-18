@@ -8,6 +8,7 @@ local glue = require'glue'
 
 local add = table.insert
 local cat = table.concat
+
 local isstr = glue.isstr
 local istab = glue.istab
 local isfunc = glue.isfunc
@@ -353,6 +354,14 @@ function schema.env.check(body)
 	end
 end
 
+function schema.env.aka(old_names)
+	return function(self, tbl, fld)
+		for _,old_name in ipairs(names(old_names)) do
+			attr(fld, 'aka')[old_name] = true
+		end
+	end
+end
+
 local function trigger_pos(tgs, when, op)
 	local i = 1
 	for _,tg in pairs(tgs) do
@@ -397,84 +406,118 @@ local function map_fields(flds)
 	return t
 end
 
-local function diff_maps(self, t1, t2, diff_vals, map, sc2, supported) --sync t2 to t1.
+local function diff_maps(self, t1, t0, diff_vals, map, sc0, supported) --sync t0 to t1.
 	if not supported then return nil end
 	t1 = t1 and (map and map(t1) or t1) or empty
-	t2 = t2 and (map and map(t2) or t2) or empty
-	local dt = {}
-	for k,v2 in pairs(t2) do
-		local v1 = t1[k]
-		if v1 == nil then
-			attr(dt, 'remove')[k] = v2
-		end
-	end
-	for k,v1 in pairs(t1) do
-		local v2 = t2[k]
-		if v2 == nil then
-			attr(dt, 'add')[k] = v1
-		elseif diff_vals then
-			local vdt = diff_vals(self, v1, v2, sc2)
-			if vdt == true then
-				attr(dt, 'remove')[k] = v2
-				attr(dt, 'add'   )[k] = v1
-			elseif vdt then
-				attr(dt, 'update')[k] = vdt
+	t0 = t0 and (map and map(t0) or t0) or empty
+
+	--map out current renames.
+	local new_name --{old_name->new_name}
+	local old_name --{new_name->old_name}
+	for k1, v1 in pairs(t1) do
+		if istab(v1) and v1.aka then
+			for k0 in pairs(v1.aka) do
+				if t0[k0] ~= nil then
+					if not old_name then
+						old_name = {}
+						new_name = {}
+					end
+					assertf(not old_name[k1], 'double rename for `%s`', k1)
+					new_name[k0] = k1
+					old_name[k1] = k0
+				end
 			end
 		end
 	end
+
+	local dt = {}
+
+	--remove names not present in new schema and not renamed.
+	for k0,v0 in pairs(t0) do
+		local v1 = new_name and t1[new_name[k0]] --must rename, not remove.
+		if v1 == nil and t1[k0] ~= nil then --old name in new schema, keep it?
+			if not (old_name and old_name[k0]) then --not a rename of other field, keep it.
+				v1 = t1[k0]
+			end
+		end
+		if v1 == nil then
+			attr(dt, 'remove')[k0] = v0
+		end
+	end
+
+	--add names not present in old schema and not renamed, or update.
+	for k1,v1 in pairs(t1) do
+		local v0 = t0[k1]
+		if v0 == nil and old_name then --not present in old schema, check if renamed.
+			v0 = t0[old_name[k1]]
+		end
+		if v0 == nil then
+			attr(dt, 'add')[k1] = v1
+		elseif diff_vals then
+			local k0 = old_name and old_name[k1] or k1
+			local vdt = diff_vals(self, v1, v0, sc0)
+			if vdt == true then
+				attr(dt, 'remove')[k0] = v0
+				attr(dt, 'add'   )[k1] = v1
+			elseif vdt then
+				attr(dt, 'update')[k0] = vdt
+			end
+		end
+	end
+
 	return next(dt) and dt or nil
 end
 
-local function diff_arrays(a1, a2)
+local function diff_arrays(a1, a0)
 	a1 = a1 or empty
-	a2 = a2 or empty
-	if #a1 ~= #a2 then return true end
+	a0 = a0 or empty
+	if #a1 ~= #a0 then return true end
 	for i,s in ipairs(a1) do
-		if a2[i] ~= s then return true end
+		if a0[i] ~= s then return true end
 	end
 	return false
 end
-local function diff_ixs(self, c1, c2)
-	return diff_arrays(c1, c2) or diff_arrays(c1.desc, c2.desc)
+local function diff_ixs(self, c1, c0)
+	return diff_arrays(c1, c0) or diff_arrays(c1.desc, c0.desc)
 end
 
 local function not_eq(_, a, b) return a ~= b end
-local function diff_keys(self, t1, t2, keys)
+local function diff_keys(self, t1, t0, keys)
 	local dt = {}
 	for k, diff in pairs(keys) do
 		if not isfunc(diff) then diff = not_eq end
-		if diff(self, t1[k], t2[k]) then
+		if diff(self, t1[k], t0[k]) then
 			dt[k] = true
 		end
 	end
-	return next(dt) and {old = t2, new = t1, changed = dt}
+	return next(dt) and {old = t0, new = t1, changed = dt}
 end
 
-local function diff_fields(self, f1, f2, sc2)
-	return diff_keys(self, f1, f2, sc2.relevant_field_attrs)
+local function diff_fields(self, f1, f0, sc0)
+	return diff_keys(self, f1, f0, sc0.relevant_field_attrs)
 end
 
-local function diff_fks(self, fk1, fk2)
-	return diff_keys(self, fk1, fk2, {
+local function diff_fks(self, fk1, fk0)
+	return diff_keys(self, fk1, fk0, {
 		table=1,
 		ref_table=1,
 		onupdate=1,
 		ondelete=1,
-		cols=function(self, c1, c2) return diff_ixs(self, c1, c2) end,
-		ref_cols=function(self, c1, c2) return diff_ixs(self, c1, c2) end,
+		cols=function(self, c1, c0) return diff_ixs(self, c1, c0) end,
+		ref_cols=function(self, c1, c0) return diff_ixs(self, c1, c0) end,
 	}) and true
 end
 
-local function diff_checks(self, c1, c2)
+local function diff_checks(self, c1, c0)
 	local BODY = self.engine..'_body'
 	local b1 = c1[BODY] or c1.body
-	local b2 = c2[BODY] or c2.body
-	return b1 ~= b2
+	local b0 = c0[BODY] or c0.body
+	return b1 ~= b0
 end
 
-local function diff_triggers(self, t1, t2)
+local function diff_triggers(self, t1, t0)
 	local BODY = self.engine..'_body'
-	return diff_keys(self, t1, t2, {
+	return diff_keys(self, t1, t0, {
 		pos=1,
 		when=1,
 		op=1,
@@ -482,42 +525,42 @@ local function diff_triggers(self, t1, t2)
 	}) and true
 end
 
-local function diff_procs(self, p1, p2, sc2)
+local function diff_procs(self, p1, p0, sc0)
 	local BODY = self.engine..'_body'
-	return diff_keys(self, p1, p2, {
+	return diff_keys(self, p1, p0, {
 		[BODY]=1,
-		args=function(self, a1, a2)
-			return diff_maps(self, a1, a2, diff_fields, map_fields, sc2, true) and true
+		args=function(self, a1, a0)
+			return diff_maps(self, a1, a0, diff_fields, map_fields, sc0, true) and true
 		end,
 	}) and true
 end
 
-local function diff_tables(self, t1, t2, sc2)
+local function diff_tables(self, t1, t0, sc0)
 	local d = {}
-	d.fields   = diff_maps(self, t1.fields  , t2.fields  , diff_fields   , map_fields, sc2, true)
-	local pk   = diff_maps(self, {pk=t1.pk} , {pk=t2.pk} , diff_ixs      , nil, sc2, true)
-	d.uks      = diff_maps(self, t1.uks     , t2.uks     , diff_ixs      , nil, sc2, true)
-	d.ixs      = diff_maps(self, t1.ixs     , t2.ixs     , diff_ixs      , nil, sc2, true)
-	d.fks      = diff_maps(self, t1.fks     , t2.fks     , diff_fks      , nil, sc2, sc2.supports_fks     )
-	d.checks   = diff_maps(self, t1.checks  , t2.checks  , diff_checks   , nil, sc2, sc2.supports_checks  )
-	d.triggers = diff_maps(self, t1.triggers, t2.triggers, diff_triggers , nil, sc2, sc2.supports_triggers)
+	d.fields   = diff_maps(self, t1.fields  , t0.fields  , diff_fields   , map_fields, sc0, true)
+	local pk   = diff_maps(self, {pk=t1.pk} , {pk=t0.pk} , diff_ixs      , nil, sc0, true)
+	d.uks      = diff_maps(self, t1.uks     , t0.uks     , diff_ixs      , nil, sc0, true)
+	d.ixs      = diff_maps(self, t1.ixs     , t0.ixs     , diff_ixs      , nil, sc0, true)
+	d.fks      = diff_maps(self, t1.fks     , t0.fks     , diff_fks      , nil, sc0, sc0.supports_fks     )
+	d.checks   = diff_maps(self, t1.checks  , t0.checks  , diff_checks   , nil, sc0, sc0.supports_checks  )
+	d.triggers = diff_maps(self, t1.triggers, t0.triggers, diff_triggers , nil, sc0, sc0.supports_triggers)
 	d.add_pk    = pk and pk.add and pk.add.pk
 	d.remove_pk = pk and pk.remove and pk.remove.pk
 	if not next(d) then return nil end
-	d.old = t2
+	d.old = t0
 	d.new = t1
 	return d
 end
 
 local diff = {is_diff = true}
 
-function schema.diff(sc2, sc1, opt) --sync sc2 to sc1.
-	local sc2 = assertf(isschema(sc2) and sc2, 'schema expected, got `%s`', type(sc2))
+function schema.diff(sc0, sc1, opt) --sync sc0 to sc1.
+	local sc0 = assertf(isschema(sc0) and sc0, 'schema expected, got `%s`', type(sc0))
+	sc0:check_refs()
 	sc1:check_refs()
-	sc2:check_refs()
-	local self = {engine = sc2.engine, __index = diff, old_schema = sc2, new_schema = sc1}
-	self.tables = diff_maps(self, sc1.tables, sc2.tables, diff_tables, nil, sc2, true)
-	self.procs  = diff_maps(self, sc1.procs , sc2.procs , diff_procs , nil, sc2, sc2.supports_procs)
+	local self = {engine = sc0.engine, __index = diff, old_schema = sc0, new_schema = sc1}
+	self.tables = diff_maps(self, sc1.tables, sc0.tables, diff_tables, nil, sc0, true)
+	self.procs  = diff_maps(self, sc1.procs , sc0.procs , diff_procs , nil, sc0, sc0.supports_procs)
 	return setmetatable(self, self)
 end
 
