@@ -40,6 +40,11 @@ local function isschema(t) return istab(t) and t.is_schema end
 
 local schema = {is_schema = true, package = {}, isschema = isschema}
 
+--NOTE: the double-underscore is for disambiguation, not for aesthetics.
+schema.fk_name_format = 'fk_%s__%s'
+schema.ck_name_format = 'ck_%s__%s'
+schema.ix_name_format = '%s_%s__%s'
+
 local function resolve_type(self, fld, t, i, n, fld_ct, allow_types, allow_flags, allow_unknown)
 	for i = i, n do
 		local k = t[i]
@@ -69,6 +74,10 @@ end
 local function parse_cols(self, t, dt, loc1, fld_ct)
 	local i = 1
 	while i <= #t do --[out], field_name, type_name, flag_name|{attr->val}, ...
+		if i == 1 and not isstr(t[1]) then --aka for renaming the table.
+			t[1](self, fld_ct)
+			i = i + 1
+		end
 		local col, mode
 		if not fld_ct.is_table then --this is a proc param, not a table field.
 			mode = t[i]
@@ -159,27 +168,27 @@ end
 
 local function return_false() return false end
 
-local function add_pk(tbl, cols)
+local function add_pk(self, tbl, cols)
 	assertf(not tbl.pk, 'pk already applied for table `%s`', tbl.name)
 	tbl.pk = check_cols('pk', tbl, cols)
 	tbl.pk.desc = imap(cols, return_false)
 end
 
-local function add_ix(T, tbl, cols)
+local function add_ix(self, T, tbl, cols)
 	local t = attr(tbl, T..'s')
-	local k = _('%s_%s__%s', T, tbl.name, cat(cols, '_'))
+	local k = _(self.ix_name_format, T, tbl.name, cat(cols, '_'))
 	assertf(not t[k], 'duplicate %s `%s`', T, k)
 	t[k] = check_cols(T, tbl, cols)
 end
 
 local function add_fk(self, tbl, cols, ref_tbl_name, ondelete, onupdate, fld)
 	local fks = attr(tbl, 'fks')
-	local k = _('fk_%s__%s', tbl.name, cat(cols, '_'))
+	local k = _(self.fk_name_format, tbl.name, cat(cols, '_'))
 	assertf(not fks[k], 'duplicate fk `%s`', k)
 	ref_tbl_name = ref_tbl_name or assert(#cols == 1 and cols[1])
 	local cols = check_cols('fk', tbl, cols)
 	cols.desc = imap(cols, return_false)
-	local fk = {table = tbl.name, cols = cols,
+	local fk = {name = k, table = tbl.name, cols = cols,
 		ref_table = ref_tbl_name, ondelete = ondelete, onupdate = onupdate}
 	fks[k] = fk
 	local ref_tbl =
@@ -306,13 +315,13 @@ local function ix_func(T)
 	return function(arg1, ...)
 		if isschema(arg1) then --used as flag: make an index on current field.
 			local self, tbl, fld = arg1, ...
-			add_ix(T, tbl, {fld.col, desc = {false}})
+			add_ix(self, T, tbl, {fld.col, desc = {false}})
 			fld[T] = true
 		else --called by user, return a flag generator.
 			local cols = pack(arg1, ...)
 			return function(self, tbl, fld)
 				local cols = parse_ix_cols(fld, unpack(cols))
-				add_ix(T, tbl, cols)
+				add_ix(self, T, tbl, cols)
 			end
 		end
 	end
@@ -326,7 +335,7 @@ schema.types = {}
 function schema.env.pk(arg1, ...)
 	if isschema(arg1) then --used as flag.
 		local self, tbl, cur_fld = arg1, ...
-		add_pk(tbl, imap(tbl.fields, 'col'))
+		add_pk(self, tbl, imap(tbl.fields, 'col'))
 		--apply `not_null` flag to all fields up to this.
 		for _,fld in ipairs(tbl.fields) do
 			fld.not_null = true
@@ -336,14 +345,14 @@ function schema.env.pk(arg1, ...)
 		local cols = pack(arg1, ...)
 		return function(self, tbl, fld)
 			local cols = parse_ix_cols(fld, unpack(cols))
-			add_pk(tbl, cols)
+			add_pk(self, tbl, cols)
 		end
 	end
 end
 
 function schema.env.check(body)
 	return function(self, tbl, fld)
-		local name = _('ck_%s__%s', tbl.name, fld.col)
+		local name = _(self.ck_name_format, tbl.name, fld.col)
 		local ck = {}
 		if istab(body) then
 			update(ck, body) --mysql'...'
@@ -356,8 +365,9 @@ end
 
 function schema.env.aka(old_names)
 	return function(self, tbl, fld)
+		local entity = fld or tbl --table rename or field rename.
 		for _,old_name in ipairs(names(old_names)) do
-			attr(fld, 'aka')[old_name] = true
+			attr(entity, 'aka')[old_name] = true
 		end
 	end
 end
@@ -544,9 +554,9 @@ local function diff_tables(self, t1, t0, sc0)
 	d.fks      = diff_maps(self, t1.fks     , t0.fks     , diff_fks      , nil, sc0, sc0.supports_fks     )
 	d.checks   = diff_maps(self, t1.checks  , t0.checks  , diff_checks   , nil, sc0, sc0.supports_checks  )
 	d.triggers = diff_maps(self, t1.triggers, t0.triggers, diff_triggers , nil, sc0, sc0.supports_triggers)
-	d.add_pk    = pk and pk.add and pk.add.pk
+	d.add_pk    = pk and pk.add    and pk.add.pk
 	d.remove_pk = pk and pk.remove and pk.remove.pk
-	if not next(d) then return nil end
+	if not (next(d) or t1.name ~= t0.name) then return nil end
 	d.old = t0
 	d.new = t1
 	return d
@@ -658,11 +668,12 @@ function diff:pp(opt)
 	end
 	if self.tables and self.tables.update then
 		local hide_attrs = opt and opt.hide_attrs
-		for tbl_name, d in sortedpairs(self.tables.update) do
-			if opt and opt.tables and not opt.tables[tbl_name] then
+		for old_tbl_name, d in sortedpairs(self.tables.update) do
+			if opt and opt.tables and not opt.tables[old_tbl_name] then
 				goto skip
 			end
-			P(' ~ TABLE %s', tbl_name)
+			P(' ~ TABLE %s%s', old_tbl_name,
+				d.new.name ~= old_tbl_name and ' -> '..d.new.name or '')
 			print(('-'):rep(80))
 			if d.fields and d.fields.add then
 				for col, fld in sortedpairs(d.fields.add) do
