@@ -56,6 +56,13 @@ do
 		end
 	end
 
+	function M.datetime_to_timestamp(v, col)
+		if v == nil then return nil end
+		local patt = '^(%d+)-(%d+)-(%d+) (%d+):(%d+):(%d+)'
+		local y, m, d, H, M, s = v:match(patt)
+		return os.time{year = y, month = m, day = d, hour = H, minute = M, second = s}
+	end
+
 end
 
 return function()
@@ -72,7 +79,7 @@ return function()
 	flags.utf8_ai_ci = {charset = utf8 , collation = 'utf8_ai_ci', mysql_collation = 'utf8mb4_0900_ai_ci', tarantool_collation = 'unicode_ci'}
 	flags.utf8_bin   = {charset = utf8 , collation = 'utf8_bin'  , mysql_collation = 'utf8mb4_0900_bin'  , tarantool_collation = 'binary'}
 
-	types.bool      = {type = 'bool', mysql_type = 'tinyint', size = 1, unsigned = true, decimals = 0, mysql_to_lua = bool_to_lua, tarantool_type = 'boolean'}
+	types.bool      = {type = 'bool', mysql_type = 'tinyint', size = 1, unsigned = true, decimals = 0, mysql_to_lua = bool_to_lua, tarantool_type = 'boolean', mysql_to_tarantool = bool_to_lua}
 	types.bool0     = {bool , not_null, default = false, mysql_default = '0', tarantool_default = false}
 	types.bool1     = {bool , not_null, default = true , mysql_default = '1', tarantool_default = true}
 	types.int8      = {type = 'number', size = 1, decimals = 0, mysql_type = 'tinyint'  , min = -(2^ 7-1), max = 2^ 7, tarantool_type = 'integer'}
@@ -94,8 +101,8 @@ return function()
 	types.time      = {int52, type = 'time', tarantool_type = 'number'}
 	types.timeofday = {type = 'timeofday', mysql_type = 'time', tarantool_type = 'number'}
 	types.date      = {type = 'date', mysql_type = 'date', mysql_to_sql = date_to_sql, tarantool_type = 'number'}
-	types.datetime  = {type = 'date', has_time = true, mysql_type = 'datetime', tarantool_type = 'number'}
-	types.timestamp = {datetime, mysql_type = 'timestamp', tarantool_type = 'number'}
+	types.datetime  = {type = 'date', has_time = true, mysql_type = 'datetime', tarantool_type = 'number', mysql_to_tarantool = datetime_to_timestamp}
+	types.timestamp = {datetime, mysql_type = 'timestamp'}
 
 	types.id        = {uint}
 	types.idpk      = {id, pk, autoinc}
